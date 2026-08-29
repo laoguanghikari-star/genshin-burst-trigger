@@ -1,0 +1,469 @@
+"""
+原神 · 元素爆发音效触发原型 v1.5
+================================
+检测逻辑（三重信号确认）:
+  1. 键盘钩子捕获 Q 键按下（爆发快捷键）
+  2. 出战角色校验：队伍面板右侧数字角标——出战角色的角标是半透明灰色，
+     非出战是纯白。只有当前出战角色 == target_slot（默认 2 = 奥黛塔）才武装触发
+  3. 按下后短暂时间窗内，屏幕中心亮度突增（爆发施放闪光）
+  BGM 播放期间屏蔽一切新触发（防止"禁忌三重奏"叠音）
+
+使用:
+  python main.py            # 正常运行
+  python main.py --test     # 只测试音频播放（不启动检测）
+  python main.py --debug    # 控制台输出每帧亮度与出战槽位，便于调参
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+BASE = Path(__file__).resolve().parent
+CONFIG_PATH = BASE / "config.json"
+
+
+# ---------------------------------------------------------------- config
+def resolve_audio(cfg: dict) -> Path:
+    """解析音频文件路径（相对路径基于项目根）。不依赖 cfg['audio_path'] 派生字段。"""
+    audio = Path(cfg.get("audio_file", "assets/burst_bgm.wav"))
+    if not audio.is_absolute():
+        audio = BASE / audio
+    return audio
+
+
+def load_config() -> dict:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    cfg["audio_path"] = resolve_audio(cfg)
+    return cfg
+
+
+# ---------------------------------------------------------------- audio
+class BgmPlayer:
+    """预加载音频，低延迟触发播放。"""
+
+    def __init__(self, wav_path: Path, volume: float = 0.9):
+        import pygame
+
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        self.pygame = pygame
+        self.sound = pygame.mixer.Sound(str(wav_path))
+        self.sound.set_volume(volume)
+        self.channel = None
+
+    def play(self) -> None:
+        self.channel = self.sound.play()
+
+    def is_playing(self) -> bool:
+        return bool(self.channel is not None and self.channel.get_busy())
+
+
+# ---------------------------------------------------------------- party panel
+class PartyPanel:
+    """队伍面板出战角色检测。
+
+    原理：右侧队伍面板每个角色头像旁有数字角标（1/2/3/4）。
+    非出战角色角标 = 不透明纯白背景；出战角色角标 = 半透明灰背景。
+    采样每个角标「上部横条」（x+10..x+30, y0+3..y0+9，避开圆角与数字）的平均亮度：
+    白色 ≈ 250+，灰色 ≈ 190。亮度显著低于中位数的那个槽位 = 当前出战角色。
+    连续 3 帧读数一致才切换判定，防抖。
+    2K 分辨率坐标（2560x1440）写死在 config.party_panel。
+    """
+
+    def __init__(self, cfg: dict):
+        p = cfg["party_panel"]
+        self.x = p["x"]  # 角标框左边缘（绝对屏幕坐标）
+        self.slot_centers = p["slot_centers"]  # 各槽位角标中心 y（绝对屏幕坐标）
+        self.half_h = p["slot_half_h"]
+        self.margin = cfg.get("active_margin", 20)
+        self._last_active: int | None = None
+        self._cand_slot: int | None = None
+        self._cand_count = 0
+
+    def _strip_lums(self, gray) -> list[float]:
+        lums = []
+        for cy in self.slot_centers:
+            y0 = cy - self.half_h
+            # 上部横条：避开圆角（x 方向向内 10px）与数字（数字在垂直中部）
+            patch = gray[y0 + 3 : y0 + 9, self.x + 10 : self.x + 30]
+            lums.append(float(patch.mean()))
+        return lums
+
+    def update(self, frame) -> None:
+        """每帧调用；连续 3 帧一致的读数才更新 self.active_slot，否则保留上一次判定。"""
+        gray = frame[..., 0] * 0.114 + frame[..., 1] * 0.587 + frame[..., 2] * 0.299
+        lums = self._strip_lums(gray)
+        med = float(np.median(lums))
+        active_idx = int(np.argmin(lums))
+        margin = med - lums[active_idx]
+        if margin > self.margin:
+            cand = active_idx + 1  # 1-based
+            if cand == self._cand_slot:
+                self._cand_count += 1
+            else:
+                self._cand_slot = cand
+                self._cand_count = 1
+            if self._cand_count >= 3:
+                self._last_active = cand
+        else:
+            # 读数不可信（面板隐藏/闪光干扰）：清空候选，保留已确认值
+            self._cand_slot = None
+            self._cand_count = 0
+
+    @property
+    def active_slot(self) -> int | None:
+        return self._last_active
+
+
+# ---------------------------------------------------------------- recognizer
+class BurstRecognizer:
+    """爆发画面识别：Q 按下后，对每帧计算「与奥黛塔爆发演示的相似度」。
+
+    评分（0-1）:
+      score = 0.25*ice + 0.20*hist + 0.55*pos_body - 0.75*max(0, max(neg_body) - pos_body)
+
+      - ice      冰蓝高光占比
+      - hist     与参考图的 HSV 色相-饱和直方图相关性
+      - pos_body 与参考图「身体/舞姿模板」的归一化互相关（主判别特征）
+      - neg_body 与各「负样本模板」（七七/桑多涅爆发参考）的归一化互相关；
+                  只有当负匹配超过正匹配时才扣分（条件扣分），防止其他冰系角色误触发
+    """
+
+    def __init__(self, cfg: dict):
+        d = cfg.get("detection", {})
+        self.threshold = float(d.get("match_threshold", 0.55))
+        self.match_frames = int(d.get("match_frames", 2))
+        self.template_roi = d.get("template_roi")  # [x,y,w,h] 身体模板
+        self.neg_penalty = float(d.get("neg_penalty", 0.75))
+        ref = Path(d.get("reference", "assets/burst_ref.png"))
+        if not ref.is_absolute():
+            ref = BASE / ref
+        self.ref_path = ref
+        self._ref_hist = None
+        self._tpl = None
+        self._neg_tpls: list = []  # (名称, 模板)
+        if ref.exists():
+            img = self._imread(ref)
+            if img is not None:
+                self._ref_hist = self._hist(img)
+                if self.template_roi:
+                    x, y, w, h = self.template_roi
+                    self._tpl = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)[y : y + h, x : x + w]
+                # 负样本模板（同区域裁剪）
+                for neg_name in d.get("negative_templates", []):
+                    p = Path(neg_name)
+                    if not p.is_absolute():
+                        p = BASE / p
+                    if p.exists():
+                        ng = self._imread(p)
+                        if ng is not None:
+                            x, y, w, h = self.template_roi
+                            self._neg_tpls.append((p.stem, cv2.cvtColor(ng, cv2.COLOR_BGR2GRAY)[y : y + h, x : x + w]))
+
+    @staticmethod
+    def _imread(path) -> np.ndarray | None:
+        """Unicode 安全读图（中文路径兼容）。"""
+        try:
+            data = np.fromfile(str(path), dtype=np.uint8)
+            return cv2.imdecode(data, cv2.IMREAD_COLOR)
+        except Exception:
+            return None
+
+    @property
+    def ready(self) -> bool:
+        return self._ref_hist is not None and self._tpl is not None
+
+    @property
+    def neg_ready(self) -> bool:
+        return len(self._neg_tpls) > 0
+
+    def _hist(self, img):
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
+        cv2.normalize(hist, hist)
+        return hist
+
+    @staticmethod
+    def _ice(img) -> float:
+        """冰蓝高光像素占比（蓝主导 + 高亮 + 有一定饱和度）。"""
+        b = img[..., 0].astype(np.float32)
+        g = img[..., 1].astype(np.float32)
+        r = img[..., 2].astype(np.float32)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        v = hsv[..., 2].astype(np.float32)
+        s = hsv[..., 1].astype(np.float32)
+        mask = (b > r * 1.2) & (b > g * 1.05) & (v > 160) & (s > 40)
+        return float(mask.mean())
+
+    @staticmethod
+    def _ncc(tpl, frame) -> float:
+        """模板匹配（4 倍缩小，实时）。"""
+        small = cv2.resize(frame, (frame.shape[1] // 4, frame.shape[0] // 4))
+        gi = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        t = cv2.resize(tpl, (tpl.shape[1] // 4, tpl.shape[0] // 4))
+        return max(0.0, float(cv2.matchTemplate(gi, t, cv2.TM_CCOEFF_NORMED).max()))
+
+    def check(self, frame) -> float:
+        """组合评分 0-1；未就绪返回 0。"""
+        if self._ref_hist is None or self._tpl is None:
+            return 0.0
+        corr = max(0.0, cv2.compareHist(self._ref_hist, self._hist(frame), cv2.HISTCMP_CORREL))
+        ice = self._ice(frame)
+        pos_body = self._ncc(self._tpl, frame)
+        score = 0.25 * ice + 0.20 * corr + 0.55 * pos_body
+        # 条件扣分：仅在负样本匹配度超过正样本时扣分（省算力 + 精准压制）
+        if self.neg_ready and pos_body > 0.40:
+            neg_best = max(self._ncc(t, frame) for _, t in self._neg_tpls)
+            score -= self.neg_penalty * max(0.0, neg_best - pos_body)
+        return max(0.0, score)
+
+
+# ---------------------------------------------------------------- detector
+class BurstTrigger:
+    def __init__(self, cfg: dict, stop_event=None, log=None, fx=None):
+        """
+        cfg: 配置字典
+        stop_event: threading.Event，置位后主循环退出（供 GUI 停止使用）
+        log: 日志回调 callable(msg)；缺省打印到控制台
+        fx: FxClient 实例（灯光特效），可为 None；触发时同步启动灯光秀
+        """
+        self.cfg = cfg
+        self.hotkey = cfg["hotkey"].lower()
+        self.cooldown = cfg["cooldown_seconds"]
+        self.threshold = cfg["flash_threshold"]
+        self.target_slot = cfg.get("target_slot", 2)
+        self.debug = cfg.get("debug", False)
+        self.fx = fx
+        self.use_slot_check = bool(cfg.get("use_slot_check", False))
+        d = cfg.get("detection", {})
+        self.det_mode = d.get("mode", "recognition")  # recognition | flash | both
+        self.window_sec = float(d.get("window_seconds", cfg.get("flash_window_seconds", 1.2)))
+        self.recognizer = BurstRecognizer(cfg) if self.det_mode in ("recognition", "both") else None
+        self._recog_hits = 0
+
+        import threading
+        self._stop = stop_event if stop_event is not None else threading.Event()
+        self._log = log if callable(log) else (lambda msg: print(msg))
+
+        self._q_pressed_at: float | None = None
+        self._q_pending_at: float | None = None
+        self._lum_at_q: float | None = None
+        self._last_trigger_at = 0.0
+        self._last_q_at = 0.0
+
+        # GUI 轮询用（只读状态）
+        self.last_lum: float | None = None
+        self.last_slot: int | None = None
+
+    # -- 键盘钩子回调（pynput 线程）--
+    def _on_press(self, key) -> None:
+        try:
+            name = key.char.lower() if hasattr(key, "char") and key.char else None
+        except Exception:
+            name = None
+        if name == self.hotkey:
+            now = time.monotonic()
+            if now - self._last_q_at > 1.0:  # 1 秒内连按只算一次
+                self._last_q_at = now
+                self._q_pressed_at = now
+                if self.debug:
+                    self._log(f"[Q] 按下")
+
+    # -- 亮度统计 --
+    @staticmethod
+    def _luminance(frame: np.ndarray) -> float:
+        gray = frame[..., 0] * 0.114 + frame[..., 1] * 0.587 + frame[..., 2] * 0.299
+        return float(gray.mean())
+
+    # -- 主循环 --
+    def run(self) -> None:
+        import dxcam
+        from pynput import keyboard
+
+        camera = dxcam.create(output_idx=0, output_color="BGR")
+        if camera is None:
+            print("无法创建屏幕捕获（dxcam）—— 请确认游戏运行在无边框窗口模式。")
+            sys.exit(1)
+
+        fps = self.cfg.get("capture_fps", 30)
+        player = None
+        listener = None
+        try:
+            camera.start(target_fps=fps, video_mode=True)
+
+            # 音频路径自行解析（不依赖调用方补 audio_path 派生字段）
+            player = BgmPlayer(resolve_audio(self.cfg), self.cfg.get("volume", 0.9))
+            panel = PartyPanel(self.cfg)
+
+            listener = keyboard.Listener(on_press=self._on_press)
+            listener.start()
+
+            if self.recognizer is not None and not self.recognizer.ready:
+                self._log(f"[识别] 警告：参考图未加载（{self.recognizer.ref_path}），识别将始终不匹配")
+
+            self._log(f"[启动] Q + {self.det_mode}模式 | 冷却 {self.cooldown}s" +
+                      (f" | 出战槽位校验 {self.target_slot}" if self.use_slot_check else " | 无槽位校验"))
+            self._log("[提示] 只有奥黛塔的爆发演示画面会触发；播放期间不会重复触发。Ctrl+C 退出。")
+
+            while True:
+                if self._stop.is_set():
+                    break
+                frame = camera.get_latest_frame()
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
+
+                # 出战槽位持续跟踪（仅开启槽位校验时需要）
+                if self.use_slot_check:
+                    panel.update(frame)
+                    self.last_slot = panel.active_slot
+                now = time.monotonic()
+
+                # Q 按下 → （可选出战校验）→ 武装确认
+                if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:
+                    if player.is_playing():
+                        self._log("[跳过] BGM 播放中，不重复触发")
+                    else:
+                        slot_ok = True
+                        if self.use_slot_check:
+                            slot_ok = self.active_slot_ok(panel)
+                        if slot_ok:
+                            region = self.cfg.get("flash_region")
+                            f = frame
+                            if region is not None:
+                                x, y, w, h = region
+                                f = frame[y : y + h, x : x + w]
+                            self._q_pending_at = now
+                            self._lum_at_q = self._luminance(f)
+                            self._recog_hits = 0
+                            if self.debug:
+                                self._log(f"[武装] 等待爆发确认（{self.det_mode}，窗口 {self.window_sec:.1f}s）")
+                        else:
+                            if self.debug:
+                                self._log(f"[忽略] 出战=槽{panel.active_slot}（目标=槽{self.target_slot}）")
+                    self._q_pressed_at = None
+
+                # 确认阶段
+                if self._q_pending_at is not None:
+                    fired = False
+                    # 闪光通道（方向不限的亮度突变）
+                    if self.det_mode in ("flash", "both"):
+                        region = self.cfg.get("flash_region")
+                        f = frame
+                        if region is not None:
+                            x, y, w, h = region
+                            f = frame[y : y + h, x : x + w]
+                        lum = self._luminance(f)
+                        self.last_lum = lum
+                        delta = lum - self._lum_at_q
+                        if self.debug:
+                            self._log(f"[待确认] lum={lum:6.1f} delta={delta:+6.1f}")
+                        if abs(delta) > self.threshold:
+                            fired = True
+                    # 识别通道（奥黛塔爆发演示画面比对）
+                    if self.det_mode in ("recognition", "both") and not fired:
+                        score = self.recognizer.check(frame)
+                        self.last_score = score
+                        if score >= self.recognizer.threshold:
+                            self._recog_hits += 1
+                        else:
+                            self._recog_hits = 0
+                        if self.debug:
+                            self._log(f"[识别] score={score:+.3f} hits={self._recog_hits}/{self.recognizer.match_frames}")
+                        if self._recog_hits >= self.recognizer.match_frames:
+                            fired = True
+
+                    if fired:
+                        if player.is_playing():
+                            self._log(f"[跳过] BGM 播放中，不重复触发")
+                        elif now - self._last_trigger_at > self.cooldown:
+                            self._last_trigger_at = now
+                            self._log(f"[触发] 识别到奥黛塔元素爆发！")
+                            player.play()
+                            self._start_fx(player)
+                        else:
+                            self._log(f"[触发] 检测到爆发，但处于冷却中，忽略")
+                        self._q_pending_at = None
+                        self._lum_at_q = None
+                        self._recog_hits = 0
+                    elif now - self._q_pending_at > self.window_sec:
+                        if self.debug:
+                            self._log("[放弃] 窗口期结束，未确认爆发（能量不满？）")
+                        self._q_pending_at = None
+                        self._lum_at_q = None
+                        self._recog_hits = 0
+        except KeyboardInterrupt:
+            pass
+        finally:
+            # 任何路径退出（含初始化中途报错）都先停干净，避免 dxcam 缓存占用
+            try:
+                camera.stop()
+            except Exception:
+                pass
+            if listener is not None:
+                try:
+                    listener.stop()
+                except Exception:
+                    pass
+            self._log("[退出] 已停止。")
+
+    def active_slot_ok(self, panel: PartyPanel) -> bool:
+        """出战角色 == 目标槽位 才允许触发；判定未知时默认不触发（安全优先）。"""
+        return panel.active_slot == self.target_slot
+
+    def _start_fx(self, player) -> None:
+        """BGM 响起的同时启动镭射灯光秀（长度与 BGM 同步）。"""
+        if self.fx is None:
+            return
+        fx_cfg = self.cfg.get("fx", {})
+        if not fx_cfg.get("enabled", True):
+            return
+        try:
+            self.fx.start(player.sound.get_length())
+            self._log("[特效] 镭射灯光秀启动")
+        except Exception as e:
+            self._log(f"[特效] 启动失败: {e}")
+
+
+# ---------------------------------------------------------------- entry
+def main() -> None:
+    parser = argparse.ArgumentParser(description="原神元素爆发音效触发原型")
+    parser.add_argument("--test", action="store_true", help="只测试音频播放")
+    parser.add_argument("--debug", action="store_true", help="调试模式（打印亮度与槽位）")
+    args = parser.parse_args()
+
+    cfg = load_config()
+    if args.debug:
+        cfg["debug"] = True
+
+    if args.test:
+        print(f"[测试] 播放 {cfg['audio_path']} …（Ctrl+C 停止）")
+        player = BgmPlayer(cfg["audio_path"], cfg.get("volume", 0.9))
+        player.play()
+        try:
+            while True:
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            player.stop()
+            print("\n[测试] 播放结束。")
+        return
+
+    from fx_client import FxClient
+
+    fx_cfg = cfg.get("fx", {})
+    fx = FxClient(enabled=fx_cfg.get("enabled", True))
+    fx.warmup()  # 预启动特效进程，首次爆发零冷启动延迟
+    try:
+        BurstTrigger(cfg, fx=fx).run()
+    finally:
+        fx.close()
+
+
+if __name__ == "__main__":
+    main()

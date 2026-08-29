@@ -1,0 +1,91 @@
+{
+  "hotkey": "q",
+  "cooldown_seconds": 20,
+  "flash_threshold": 25,
+  "flash_window_seconds": 1.2,
+  "capture_fps": 30,
+  "flash_region": [
+    640,
+    360,
+    1280,
+    720
+  ],
+  "target_slot": 2,
+  "use_slot_check": false,
+  "detection": {
+    "mode": "recognition",
+    "reference": "assets/burst_ref.png",
+    "template_roi": [
+      768,
+      288,
+      1024,
+      864
+    ],
+    "negative_templates": [
+      "assets/neg_qiqi.png",
+      "assets/neg_qiqi2.png",
+      "assets/neg_sandrone.png",
+      "assets/neg_sandrone2.png"
+    ],
+    "neg_penalty": 1.0,
+    "match_threshold": 0.55,
+    "match_frames": 2,
+    "window_seconds": 2.5
+  },
+  "party_panel": {
+    "x": 2480,
+    "y": 349,
+    "w": 40,
+    "slot_centers": [
+      368,
+      490,
+      611,
+      733
+    ],
+    "slot_half_h": 19
+  },
+  "active_margin": 20,
+  "audio_file": "assets/burst_bgm.wav",
+  "volume": 0.5,
+  "debug": true,
+  "fx": {
+    "enabled": true,
+    "intensity": 0.87,
+    "edge_ratio": 0.13,
+    "cycle_seconds": 14.0,
+    "fade_seconds": 2.0,
+    "fps": 30,
+    "protected_region": null,
+    "gif": {
+      "path": "C:/Users/idolhikari/Documents/deepseek_workspace_01/output/dance27s_full.gif",
+      "width": 640,
+      "height": 360,
+      "y": 252,
+      "x_left": 30,
+      "x_right": 1890
+    }
+  },
+  "voice": {
+    "enabled": false,
+    "model_path": "models/vosk-model-small-cn-0.22",
+    "device": null,
+    "game_path": "C:/Program Files/miHoYo Launcher/games/Genshin Impact Game/YuanShen.exe",
+    "tts": true,
+    "commands": {
+      "原神 启动": "launch_game",
+      "启动 原神": "launch_game",
+      "原 神 启动": "launch_game",
+      "元 神 启动": "launch_game",
+      "源 神 启动": "launch_game",
+      "启动 游戏": "launch_game",
+      "开始 游戏": "launch_game",
+      "关闭 原神": "quit_game",
+      "退出 原神": "quit_game",
+      "打开 特效": "fx_on",
+      "关闭 特效": "fx_off",
+      "试听 音乐": "preview_music",
+      "开始 检测": "start_detect",
+      "停止 检测": "stop_detect"
+    }
+  }
+}
