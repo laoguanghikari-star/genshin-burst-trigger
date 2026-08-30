@@ -30,11 +30,12 @@ def chroma_key(frame: np.ndarray) -> np.ndarray:
     alpha[edge] = edge_a
     alpha = cv2.GaussianBlur(alpha, (0, 0), 1.0)
 
-    # 去绿溢出：绿通道压到红蓝的 1.15 倍（绿色残留区域）
-    b, g, r = frame[..., 0].astype(np.int16), frame[..., 1].astype(np.int16), frame[..., 2].astype(np.int16)
-    green_zone = (dh < 40) & (ss > 50) & (vv > 30)
-    spill = green_zone & (g > b * 1.15) & (g > r * 1.15)
-    g[spill] = np.maximum(b[spill], r[spill]) * 1.10
+    # 去绿溢出：按绿色程度按比例把绿通道拉向红蓝（前景区域）
+    b, g, r = frame[..., 0].astype(np.float32), frame[..., 1].astype(np.float32), frame[..., 2].astype(np.float32)
+    greenness = np.clip(1.0 - dh / 45.0, 0, 1) * np.clip((ss - 40) / 110.0, 0, 1)
+    greenness = np.clip(greenness, 0, 1) * (alpha > 60)
+    target = np.maximum(b, r) * 0.92
+    g = g - greenness * (g - target) * 0.9
     g = np.clip(g, 0, 255).astype(np.uint8)
 
     out = np.dstack([frame[..., 0], g, frame[..., 2], alpha])
@@ -70,7 +71,7 @@ def main():
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
     pad = 8
     x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
-    x1, y1 = min(719, x1 + pad), min(1279, y1 + pad)
+    x1, y1 = min(1279, x1 + pad), min(719, y1 + pad)  # 注意：x 上限 1279，y 上限 719
     print(f"内容包围盒: ({x0},{y0})-({x1},{y1})")
 
     # 裁切 + 缩放到高约 360（2K 显示尺寸）/4 = 90 @360p… 先按显示高 360 存，渲染时再缩

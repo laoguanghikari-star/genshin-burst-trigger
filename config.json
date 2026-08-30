@@ -85,7 +85,12 @@
   "completion": {
     "enabled": true,
     "reference": "assets/completion_ref.png",
-    "template_roi": [0, 0, 2560, 1440],
+    "template_roi": [
+      0,
+      0,
+      2560,
+      1440
+    ],
     "negative_templates": [
       "assets/completion_neg_fail.png",
       "assets/completion_neg_select.png",
