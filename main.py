@@ -124,48 +124,56 @@ class PartyPanel:
 
 # ---------------------------------------------------------------- recognizer
 class BurstRecognizer:
-    """爆发画面识别：Q 按下后，对每帧计算「与奥黛塔爆发演示的相似度」。
+    """爆发画面识别：Q 按下后，对每帧计算「与目标角色爆发演示的相似度」。
 
     评分（0-1）:
-      score = 0.25*ice + 0.20*hist + 0.55*pos_body - 0.75*max(0, max(neg_body) - pos_body)
+      score = 0.25*ice + 0.20*hist + 0.55*pos_body - neg_penalty*max(0, max(neg_body) - pos_body)
 
       - ice      冰蓝高光占比
       - hist     与参考图的 HSV 色相-饱和直方图相关性
       - pos_body 与参考图「身体/舞姿模板」的归一化互相关（主判别特征）
-      - neg_body 与各「负样本模板」（七七/桑多涅/玛薇卡/茜特菈莉爆发参考）的归一化互相关；
+      - neg_body 与各「负样本模板」的归一化互相关；
                   只有当负匹配超过正匹配时才扣分（条件扣分），防止其他角色误触发
+      reference 支持多张参考图（列表）：分别评分取最大，覆盖爆发演示的不同阶段；
+      negative_roi 可单独指定负样本裁剪区域（默认与 template_roi 相同）
     """
 
     def __init__(self, cfg: dict):
         d = cfg.get("detection", {})
         self.threshold = float(d.get("match_threshold", 0.55))
         self.match_frames = int(d.get("match_frames", 2))
-        self.template_roi = d.get("template_roi")  # [x,y,w,h] 身体模板
+        self.template_roi = d.get("template_roi")  # [x,y,w,h] 正参考裁剪
+        self.negative_roi = d.get("negative_roi") or self.template_roi  # 负样本裁剪
         self.neg_penalty = float(d.get("neg_penalty", 0.75))
-        ref = Path(d.get("reference", "assets/burst_ref.png"))
-        if not ref.is_absolute():
-            ref = BASE / ref
-        self.ref_path = ref
-        self._ref_hist = None
-        self._tpl = None
-        self._neg_tpls: list = []  # (名称, 模板)
-        if ref.exists():
-            img = self._imread(ref)
-            if img is not None:
-                self._ref_hist = self._hist(img)
-                if self.template_roi:
-                    x, y, w, h = self.template_roi
-                    self._tpl = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)[y : y + h, x : x + w]
-                # 负样本模板（同区域裁剪）
-                for neg_name in d.get("negative_templates", []):
-                    p = Path(neg_name)
-                    if not p.is_absolute():
-                        p = BASE / p
-                    if p.exists():
-                        ng = self._imread(p)
-                        if ng is not None:
-                            x, y, w, h = self.template_roi
-                            self._neg_tpls.append((p.stem, cv2.cvtColor(ng, cv2.COLOR_BGR2GRAY)[y : y + h, x : x + w]))
+        refs = d.get("reference", "assets/burst_ref.png")
+        if isinstance(refs, str):
+            refs = [refs]
+        self.ref_path = refs[0] if refs else ""
+        self._refs: list = []  # [(直方图, ¼ 模板), ...]
+        for ref_name in refs:
+            ref = Path(ref_name)
+            if not ref.is_absolute():
+                ref = BASE / ref
+            if ref.exists():
+                img = self._imread(ref)
+                if img is not None:
+                    tpl = self._crop_gray(img, self.template_roi)
+                    if tpl is not None:
+                        # 直方图与帧同尺度（¼ 小图）计算，保证可比且省算力
+                        small = cv2.resize(img, (img.shape[1] // 4, img.shape[0] // 4))
+                        self._refs.append((self._hist(small), self._shrink(tpl)))
+        # 负样本模板（¼ 缩放，裁剪用 negative_roi）
+        self._neg_tpls: list = []  # (名称, ¼ 模板)
+        for neg_name in d.get("negative_templates", []):
+            p = Path(neg_name)
+            if not p.is_absolute():
+                p = BASE / p
+            if p.exists():
+                ng = self._imread(p)
+                if ng is not None:
+                    tpl = self._crop_gray(ng, self.negative_roi)
+                    if tpl is not None:
+                        self._neg_tpls.append((p.stem, self._shrink(tpl)))
 
     @staticmethod
     def _imread(path) -> np.ndarray | None:
@@ -176,9 +184,23 @@ class BurstRecognizer:
         except Exception:
             return None
 
+    @staticmethod
+    def _crop_gray(img, roi) -> np.ndarray | None:
+        """按 ROI 裁剪出灰度模板；图片比 ROI 小（已是裁剪好的模板）时整图使用。"""
+        if not roi:
+            return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        x, y, w, h = roi
+        if x + w > img.shape[1] or y + h > img.shape[0]:
+            return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)[y : y + h, x : x + w]
+
+    @staticmethod
+    def _shrink(tpl) -> np.ndarray:
+        return cv2.resize(tpl, (tpl.shape[1] // 4, tpl.shape[0] // 4))
+
     @property
     def ready(self) -> bool:
-        return self._ref_hist is not None and self._tpl is not None
+        return len(self._refs) > 0
 
     @property
     def neg_ready(self) -> bool:
@@ -202,27 +224,41 @@ class BurstRecognizer:
         mask = (b > r * 1.2) & (b > g * 1.05) & (v > 160) & (s > 40)
         return float(mask.mean())
 
-    @staticmethod
-    def _ncc(tpl, frame) -> float:
-        """模板匹配（4 倍缩小，实时）。"""
-        small = cv2.resize(frame, (frame.shape[1] // 4, frame.shape[0] // 4))
-        gi = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        t = cv2.resize(tpl, (tpl.shape[1] // 4, tpl.shape[0] // 4))
-        return max(0.0, float(cv2.matchTemplate(gi, t, cv2.TM_CCOEFF_NORMED).max()))
+    def _match(self, gi, tpl) -> float:
+        """¼ 灰度帧上的模板匹配（模板已预缩放）。"""
+        return max(0.0, float(cv2.matchTemplate(gi, tpl, cv2.TM_CCOEFF_NORMED).max()))
 
-    def check(self, frame) -> float:
-        """组合评分 0-1；未就绪返回 0。"""
-        if self._ref_hist is None or self._tpl is None:
+    @staticmethod
+    def _prepare(frame):
+        """帧预处理：¼ 缩放 + 灰度（多个识别器可共享，省重复计算）。"""
+        small = cv2.resize(frame, (frame.shape[1] // 4, frame.shape[0] // 4))
+        return small, cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+    def check(self, frame, shared=None) -> float:
+        """组合评分 0-1；未就绪返回 0。多参考图取最大得分。
+        shared: _prepare 的输出，同一帧多个识别器共享。"""
+        if not self._refs:
             return 0.0
-        corr = max(0.0, cv2.compareHist(self._ref_hist, self._hist(frame), cv2.HISTCMP_CORREL))
-        ice = self._ice(frame)
-        pos_body = self._ncc(self._tpl, frame)
-        score = 0.25 * ice + 0.20 * corr + 0.55 * pos_body
-        # 条件扣分：仅在负样本匹配度超过正样本时扣分（省算力 + 精准压制）
-        if self.neg_ready and pos_body > 0.40:
-            neg_best = max(self._ncc(t, frame) for _, t in self._neg_tpls)
-            score -= self.neg_penalty * max(0.0, neg_best - pos_body)
-        return max(0.0, score)
+        if shared is not None:
+            small, gi = shared
+        else:
+            small, gi = self._prepare(frame)
+        # 冰蓝占比与直方图都在 ¼ 小图上统计：比例/分布稳定，速度提升 10 倍以上
+        ice = self._ice(small)
+        fhist = self._hist(small)
+        best = 0.0
+        neg_best = None  # 惰性：仅当某参考 pos>0.40 时计算一次（与参考图无关，可复用）
+        for hist, tpl in self._refs:
+            corr = max(0.0, cv2.compareHist(hist, fhist, cv2.HISTCMP_CORREL))
+            pos = self._match(gi, tpl)
+            s = 0.25 * ice + 0.20 * corr + 0.55 * pos
+            # 条件扣分：仅在负样本匹配度超过正样本时扣分（省算力 + 精准压制）
+            if self.neg_ready and pos > 0.40:
+                if neg_best is None:
+                    neg_best = max(self._match(gi, t) for _, t in self._neg_tpls)
+                s -= self.neg_penalty * max(0.0, neg_best - pos)
+            best = max(best, s)
+        return max(0.0, best)
 
 
 # ---------------------------------------------------------------- completion
@@ -314,6 +350,22 @@ class BurstTrigger:
         self._last_trigger_at = 0.0
         self._last_q_at = 0.0
 
+        # 玛薇卡独立识别器（可选；config 的 mavuika 段启用）
+        self.mavuika_rec: BurstRecognizer | None = None
+        self._mav_hits = 0
+        self.last_mavuika_score = 0.0
+        mav_cfg = cfg.get("mavuika", {})
+        if mav_cfg.get("enabled", False) and self.det_mode in ("recognition", "both"):
+            try:
+                mr = BurstRecognizer({"detection": mav_cfg})
+                if mr.ready:
+                    self.mavuika_rec = mr
+                    self._log(f"[玛薇卡] 爆发识别已加载（{len(mr._refs)} 张参考图，{len(mr._neg_tpls)} 个负样本）")
+                else:
+                    self._log("[玛薇卡] 参考图缺失，识别未启用")
+            except Exception as e:
+                self._log(f"[玛薇卡] 识别加载失败: {e}")
+
         # GUI 轮询用（只读状态）
         self.last_lum: float | None = None
         self.last_slot: int | None = None
@@ -353,6 +405,7 @@ class BurstTrigger:
         listener = None
         victory_sound = None
         victory_bgm = None
+        mavuika_player = None
         try:
             camera.start(target_fps=fps, video_mode=True)
 
@@ -383,6 +436,20 @@ class BurstTrigger:
                         self._log(f"[通关] BGM 文件不存在（跳过）: {bgm_path}")
                 except Exception as e:
                     self._log(f"[通关] BGM 加载失败（跳过）: {e}")
+            # 玛薇卡专属 BGM（元素爆发触发播放；特效待定）
+            if self.mavuika_rec is not None:
+                try:
+                    mav_cfg = self.cfg.get("mavuika", {})
+                    audio = Path(mav_cfg.get("audio_file", "assets/mavuika_bgm.wav"))
+                    if not audio.is_absolute():
+                        audio = BASE / audio
+                    if audio.exists():
+                        mavuika_player = BgmPlayer(audio, self.cfg.get("volume", 0.9))
+                        self._log("[玛薇卡] 专属 BGM 就绪")
+                    else:
+                        self._log(f"[玛薇卡] BGM 文件不存在（仅识别不播音乐）: {audio}")
+                except Exception as e:
+                    self._log(f"[玛薇卡] BGM 加载失败: {e}")
 
             listener = keyboard.Listener(on_press=self._on_press)
             listener.start()
@@ -415,7 +482,7 @@ class BurstTrigger:
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:
-                    if player.is_playing():
+                    if player.is_playing() or (mavuika_player is not None and mavuika_player.is_playing()):
                         self._log("[跳过] BGM 播放中，不重复触发")
                     else:
                         slot_ok = True
@@ -430,6 +497,7 @@ class BurstTrigger:
                             self._q_pending_at = now
                             self._lum_at_q = self._luminance(f)
                             self._recog_hits = 0
+                            self._mav_hits = 0
                             if self.debug:
                                 self._log(f"[武装] 等待爆发确认（{self.det_mode}，窗口 {self.window_sec:.1f}s）")
                         else:
@@ -440,6 +508,8 @@ class BurstTrigger:
                 # 确认阶段
                 if self._q_pending_at is not None:
                     fired = False
+                    fired_kind = "odette"
+                    shared = None  # 帧预处理结果（奥黛塔/玛薇卡识别器共享）
                     # 闪光通道（方向不限的亮度突变）
                     if self.det_mode in ("flash", "both"):
                         region = self.cfg.get("flash_region")
@@ -456,7 +526,9 @@ class BurstTrigger:
                             fired = True
                     # 识别通道（奥黛塔爆发演示画面比对）
                     if self.det_mode in ("recognition", "both") and not fired:
-                        score = self.recognizer.check(frame)
+                        if shared is None:
+                            shared = self.recognizer._prepare(frame)
+                        score = self.recognizer.check(frame, shared)
                         self.last_score = score
                         if score >= self.recognizer.threshold:
                             self._recog_hits += 1
@@ -466,26 +538,56 @@ class BurstTrigger:
                             self._log(f"[识别] score={score:+.3f} hits={self._recog_hits}/{self.recognizer.match_frames}")
                         if self._recog_hits >= self.recognizer.match_frames:
                             fired = True
+                            fired_kind = "odette"
+                    # 识别通道（玛薇卡爆发演示，独立识别器）
+                    if self.det_mode in ("recognition", "both") and not fired and self.mavuika_rec is not None:
+                        if shared is None:
+                            shared = self.mavuika_rec._prepare(frame)
+                        mscore = self.mavuika_rec.check(frame, shared)
+                        self.last_mavuika_score = mscore
+                        if mscore >= self.mavuika_rec.threshold:
+                            self._mav_hits += 1
+                        else:
+                            self._mav_hits = 0
+                        if self.debug:
+                            self._log(f"[玛薇卡] score={mscore:+.3f} hits={self._mav_hits}/{self.mavuika_rec.match_frames}")
+                        if self._mav_hits >= self.mavuika_rec.match_frames:
+                            fired = True
+                            fired_kind = "mavuika"
 
                     if fired:
-                        if player.is_playing():
-                            self._log(f"[跳过] BGM 播放中，不重复触发")
-                        elif now - self._last_trigger_at > self.cooldown:
-                            self._last_trigger_at = now
-                            self._log(f"[触发] 识别到奥黛塔元素爆发！")
-                            player.play()
-                            self._start_fx(player)
+                        if fired_kind == "mavuika":
+                            if player.is_playing() or (mavuika_player is not None and mavuika_player.is_playing()):
+                                self._log("[跳过] BGM 播放中，不重复触发")
+                            elif now - self._last_trigger_at > self.cooldown:
+                                self._last_trigger_at = now
+                                self._log("[玛薇卡] 识别到玛薇卡元素爆发！播放专属 BGM")
+                                if mavuika_player is not None:
+                                    mavuika_player.play()
+                                # 玛薇卡专属灯光特效待定（用户后续补充）
+                            else:
+                                self._log("[触发] 检测到玛薇卡爆发，但处于冷却中，忽略")
                         else:
-                            self._log(f"[触发] 检测到爆发，但处于冷却中，忽略")
+                            if player.is_playing() or (mavuika_player is not None and mavuika_player.is_playing()):
+                                self._log(f"[跳过] BGM 播放中，不重复触发")
+                            elif now - self._last_trigger_at > self.cooldown:
+                                self._last_trigger_at = now
+                                self._log(f"[触发] 识别到奥黛塔元素爆发！")
+                                player.play()
+                                self._start_fx(player)
+                            else:
+                                self._log(f"[触发] 检测到爆发，但处于冷却中，忽略")
                         self._q_pending_at = None
                         self._lum_at_q = None
                         self._recog_hits = 0
+                        self._mav_hits = 0
                     elif now - self._q_pending_at > self.window_sec:
                         if self.debug:
                             self._log("[放弃] 窗口期结束，未确认爆发（能量不满？）")
                         self._q_pending_at = None
                         self._lum_at_q = None
                         self._recog_hits = 0
+                        self._mav_hits = 0
         except KeyboardInterrupt:
             pass
         finally:

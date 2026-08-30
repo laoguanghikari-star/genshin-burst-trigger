@@ -109,5 +109,37 @@
     "bgm_file": "assets/victory_bgm.wav",
     "bgm_fade_delay_seconds": 0.0,
     "fx_duration": 14
+  },
+  "mavuika": {
+    "enabled": true,
+    "reference": [
+      "assets/mavuika_ref01.png",
+      "assets/mavuika_ref02.png"
+    ],
+    "template_roi": [
+      0,
+      0,
+      1024,
+      864
+    ],
+    "negative_roi": [
+      768,
+      288,
+      1024,
+      864
+    ],
+    "negative_templates": [
+      "assets/neg_qiqi.png",
+      "assets/neg_qiqi2.png",
+      "assets/neg_sandrone.png",
+      "assets/neg_sandrone2.png",
+      "assets/neg_citlali01.png",
+      "assets/burst_ref.png"
+    ],
+    "neg_penalty": 1.0,
+    "match_threshold": 0.5,
+    "match_frames": 2,
+    "window_seconds": 2.5,
+    "audio_file": "assets/mavuika_bgm.wav"
   }
 }
