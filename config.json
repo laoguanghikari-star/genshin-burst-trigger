@@ -56,7 +56,8 @@
     "fade_seconds": 2.0,
     "fps": 30,
     "protected_region": null,
-    "victory_gif": "assets/victory_walk.gif",
+    "burst_duration": 27,
+    "victory_frames": "assets/victory_frames.npz",
     "gif": {
       "path": "C:/Users/idolhikari/Documents/deepseek_workspace_01/output/dance27s_full.gif",
       "width": 640,
@@ -67,7 +68,7 @@
     }
   },
   "voice": {
-    "enabled": false,
+    "enabled": true,
     "model_path": "models/vosk-model-small-cn-0.22",
     "device": null,
     "game_path": "C:/Program Files/miHoYo Launcher/games/Genshin Impact Game/YuanShen.exe",

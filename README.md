@@ -17,9 +17,10 @@
 通关幽境危战结算页出现时，自动触发庆祝特效：
 
 - **通关页识别**：持续屏幕监控（`completion` 配置块），参考图 `assets/completion_ref.png`，负样本为失败/选择/载入界面；边沿触发 + 8 秒冷却
-- **胜利特效**（fx_server 胜利模式）：从 B 站绿幕素材抠像的小人（`assets/victory_walk.gif`）从屏幕左右走入、停在两侧约 1/4 处，中央三连发礼花
+- **胜利特效**（fx_server 胜利模式）：从 B 站绿幕素材抠像的小人（`assets/victory_frames.npz`，无损帧序列）从屏幕左右走入、停在两侧约 1/4 处，中央三连发礼花
 - **音效**：播放「Unbelievable!」（`assets/unbelievable.wav`）
-- 素材处理脚本：`tools/process_victory.py`（绿幕抠像 → 透明 GIF）
+- 素材处理脚本：`tools/process_victory.py`（绿幕抠像 → 无损帧序列）
+- 爆发灯光秀默认 27 秒（`fx.burst_duration`），特效播放期间自动暂停通关检测，避免灯光干扰识别
 
 ## 灯光特效（fx）
 

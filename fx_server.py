@@ -321,35 +321,30 @@ class LaserApp:
         do()
         self.root.after(400, do)  # Tk 后续事件可能再次激活，稍后重试一次
 
-    # -- 胜利模式 GIF（透明小人） --
+    # -- 胜利模式帧（无损 NPZ，GIF 调色板会毁颜色） --
     def _load_victory(self, cfg):
-        path = cfg.get("victory_gif", "assets/victory_walk.gif")
+        path = cfg.get("victory_frames", "assets/victory_frames.npz")
         if not Path(path).is_absolute():
             path = str(BASE / path)
         if not Path(path).exists():
-            self._log(f"胜利 GIF 不存在（跳过）: {path}")
+            self._log(f"胜利帧不存在（跳过）: {path}")
             return
         try:
-            from PIL import Image
-            im = Image.open(path)
-            n = getattr(im, "n_frames", 1)
-            # 显示高度 360px（2K）→ 360p 工作分辨率 90px
+            data = np.load(path)
+            arr = data["frames"]  # (N, H, W, 4) BGRA
+            # 缩放到 360p 工作分辨率（显示高 360 -> 90）
             vh = 90
             frames = []
-            for i in range(n):
-                im.seek(i)
-                fr = im.convert("RGBA")
-                ch, cw = fr.size[1], fr.size[0]
-                scale = vh / ch
-                nw = max(1, int(cw * scale))
-                fr = fr.resize((nw, vh), Image.LANCZOS)
-                arr = np.array(fr)
-                frames.append(arr[..., [2, 1, 0, 3]])  # RGB→BGR
+            for fr in arr:
+                h, w = fr.shape[:2]
+                scale = vh / h
+                nw = max(1, int(w * scale))
+                frames.append(cv2.resize(fr, (nw, vh), interpolation=cv2.INTER_AREA))
             self._victory_frames = frames
-            self._victory_fps = max(1.0, 1000.0 / max(20, im.info.get("duration", 33)))
-            self._log(f"胜利 GIF 已加载: {n} 帧 @{self._victory_fps:.0f}fps，尺寸 {nw}x{vh}（360p）")
+            self._victory_fps = 30.0
+            self._log(f"胜利帧已加载: {len(frames)} 帧，尺寸 {nw}x{vh}（360p）")
         except Exception as e:
-            self._log(f"胜利 GIF 加载失败: {e}")
+            self._log(f"胜利帧加载失败: {e}")
 
     def _blit_rgba(self, color, alpha, fr, x0, y0, k):
         """把 BGRA 帧加法混合到画布（带边界裁剪）。"""

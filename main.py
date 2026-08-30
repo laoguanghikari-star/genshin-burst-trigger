@@ -301,6 +301,7 @@ class BurstTrigger:
         self.recognizer = BurstRecognizer(cfg) if self.det_mode in ("recognition", "both") else None
         self._recog_hits = 0
         self.completion = CompletionMonitor(cfg)
+        self._fx_until = 0.0  # 特效结束时间戳：期间暂停通关检测（避免灯光干扰）
 
         import threading
         self._stop = stop_event if stop_event is not None else threading.Event()
@@ -391,13 +392,14 @@ class BurstTrigger:
                     self.last_slot = panel.active_slot
                 now = time.monotonic()
 
-                # 幽境危战通关页监控（持续，独立于 Q）
-                if self.completion.update(frame, now):
+                # 幽境危战通关页监控（持续，独立于 Q；特效播放期间暂停，避免灯光干扰识别）
+                if now >= self._fx_until and self.completion.update(frame, now):
                     self._log("[通关] 幽境危战通关！胜利特效启动 🎉")
                     if victory_sound is not None:
                         victory_sound.play()
                     if self.fx is not None and self.cfg.get("fx", {}).get("enabled", True):
                         self.fx.start_victory(self.completion.fx_duration)
+                        self._fx_until = now + self.completion.fx_duration + 2.0
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:
@@ -492,15 +494,18 @@ class BurstTrigger:
         return panel.active_slot == self.target_slot
 
     def _start_fx(self, player) -> None:
-        """BGM 响起的同时启动镭射灯光秀（长度与 BGM 同步）。"""
+        """BGM 响起的同时启动镭射灯光秀（时长取 fx.burst_duration，默认 27 秒，
+        避免灯光长时间遮挡屏幕影响通关页检测；BGM 仍播完整首）。"""
         if self.fx is None:
             return
         fx_cfg = self.cfg.get("fx", {})
         if not fx_cfg.get("enabled", True):
             return
         try:
-            self.fx.start(player.sound.get_length())
-            self._log("[特效] 镭射灯光秀启动")
+            duration = float(fx_cfg.get("burst_duration", 27))
+            self.fx.start(duration)
+            self._fx_until = time.monotonic() + duration + 2.0  # 特效期间暂停通关检测
+            self._log(f"[特效] 镭射灯光秀启动（{duration:.0f}s，BGM 继续播放）")
         except Exception as e:
             self._log(f"[特效] 启动失败: {e}")
 

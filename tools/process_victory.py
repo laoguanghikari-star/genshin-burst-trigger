@@ -30,12 +30,13 @@ def chroma_key(frame: np.ndarray) -> np.ndarray:
     alpha[edge] = edge_a
     alpha = cv2.GaussianBlur(alpha, (0, 0), 1.0)
 
-    # 去绿溢出：按绿色程度按比例把绿通道拉向红蓝（前景区域）
+    # 去绿溢出：温和地把绿通道拉向红蓝的均值（避免拉向 max 导致整体偏蓝）
     b, g, r = frame[..., 0].astype(np.float32), frame[..., 1].astype(np.float32), frame[..., 2].astype(np.float32)
     greenness = np.clip(1.0 - dh / 45.0, 0, 1) * np.clip((ss - 40) / 110.0, 0, 1)
-    greenness = np.clip(greenness, 0, 1) * (alpha > 60)
-    target = np.maximum(b, r) * 0.92
-    g = g - greenness * (g - target) * 0.9
+    greenness = np.clip(greenness, 0, 1)
+    spill = (greenness > 0.20) & (alpha > 60)  # 只处理强绿影响的实心前景
+    target = (b + r) * 0.5
+    g = g - greenness * (g - target) * 0.55
     g = np.clip(g, 0, 255).astype(np.uint8)
 
     out = np.dstack([frame[..., 0], g, frame[..., 2], alpha])
@@ -74,22 +75,21 @@ def main():
     x1, y1 = min(1279, x1 + pad), min(719, y1 + pad)  # 注意：x 上限 1279，y 上限 719
     print(f"内容包围盒: ({x0},{y0})-({x1},{y1})")
 
-    # 裁切 + 缩放到高约 360（2K 显示尺寸）/4 = 90 @360p… 先按显示高 360 存，渲染时再缩
+    # 裁切 + 缩放到高约 360（显示尺寸），存为无损 NPZ（GIF 8 位调色板会毁掉颜色）
     target_h = 360
-    pil_frames = []
+    frames_arr = []
     for fr in frames:
         crop = fr[y0:y1 + 1, x0:x1 + 1]
         ch, cw = crop.shape[:2]
         scale = target_h / ch
         nw, nh = max(1, int(cw * scale)), target_h
         crop = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_AREA)
-        pil_frames.append(Image.fromarray(crop, "RGBA"))
-
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    pil_frames[0].save(OUT, save_all=True, append_images=pil_frames[1:],
-                       duration=1000 / FPS, loop=0, disposal=2, optimize=True)
-    print(f"输出: {OUT} 尺寸 {pil_frames[0].size} 帧数 {len(pil_frames)} "
-          f"({OUT.stat().st_size / 1024 / 1024:.1f} MB)")
+        frames_arr.append(crop)  # BGRA
+    arr = np.stack(frames_arr)  # (N, H, W, 4) uint8
+    OUT_NPZ = BASE / "assets" / "victory_frames.npz"
+    np.savez_compressed(OUT_NPZ, frames=arr)
+    print(f"输出: {OUT_NPZ} 尺寸 {arr.shape[1]}x{arr.shape[2]} 帧数 {len(arr)} "
+          f"({OUT_NPZ.stat().st_size / 1024 / 1024:.1f} MB, 无损)")
 
 
 if __name__ == "__main__":
