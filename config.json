@@ -104,7 +104,7 @@
     "reset_seconds": 8,
     "sound_file": "assets/unbelievable.wav",
     "bgm_file": "assets/victory_bgm.wav",
-    "bgm_fade_delay_seconds": 2.0,
-    "fx_duration": 12
+    "bgm_fade_delay_seconds": 0.0,
+    "fx_duration": 14
   }
 }

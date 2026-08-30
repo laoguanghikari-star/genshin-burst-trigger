@@ -524,6 +524,9 @@ class BurstTrigger:
             if victory_bgm is not None:
                 length = victory_sound.sound.get_length()
                 threading.Timer(max(0.1, length + 0.05), victory_bgm.play).start()
+        elif victory_bgm is not None:
+            # 音效缺失时 BGM 直接开播，庆祝序列不中断
+            victory_bgm.play()
         if victory_bgm is not None:
             fade_delay = float(comp.get("bgm_fade_delay_seconds", 2.0))
             fade = float(self.cfg.get("fx", {}).get("fade_seconds", 2.0))

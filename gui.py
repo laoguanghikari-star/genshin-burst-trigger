@@ -339,7 +339,7 @@ class App(tk.Tk):
                 time.sleep(wait)
                 if bgm is not None and bgm.channel is not None:
                     bgm.channel.fadeout(int(fade * 1000))
-                    self.log("[通关] BGM 淡出（特效已结束 2 秒）")
+                    self.log("[通关] BGM 与特效同时淡出")
             except Exception as e:
                 self.log(f"[通关] 测试失败: {e}")
 

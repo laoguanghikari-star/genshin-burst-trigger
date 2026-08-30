@@ -393,10 +393,10 @@ class LaserApp:
         self._draw_fireworks(color, alpha, elapsed, k)
 
     def _make_fireworks(self) -> list[dict]:
-        """生成礼花编组：8 朵错峰发射；每朵必带金 + 红，另随机补 2 种彩池色。"""
+        """生成礼花编组：9 朵错峰发射；每朵必带金 + 红，另随机补 2 种彩池色。"""
         rnd = self._rand
         fws = []
-        for i in range(8):
+        for i in range(9):
             fws.append({
                 "launch": 0.7 + i * 1.45 + rnd.uniform(-0.1, 0.1),
                 "x0": RW * rnd.uniform(0.06, 0.94),   # 发射点（屏幕底部）
