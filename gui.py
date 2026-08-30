@@ -196,6 +196,7 @@ class App(tk.Tk):
         self.btn_stop = theme.round_button(self, "停止检测", self._stop, kind="danger")
         self.btn_stop.place(x=372, y=582)
         self.btn_stop.config(state="disabled")
+        theme.round_button(self, "测试通关", self._test_victory, kind="normal").place(x=488, y=582)
 
         # -- 状态行 --
         self.status_dot = tk.Label(self, text="●", bg=lab, fg=theme.ERR, bd=0, highlightthickness=0,
@@ -287,6 +288,35 @@ class App(tk.Tk):
                 speak("原神，启动！")
         else:
             self.log(f"未找到游戏: {path}（可在 config.json 的 voice.game_path 配置）")
+
+    # ------------------------------------------------------------ victory
+    def _test_victory(self):
+        """测试通关庆祝：Unbelievable 音效 + 胜利特效（无需真通关）。"""
+        self.log("[通关] 测试按钮：播放庆祝特效")
+
+        def work():
+            try:
+                # 特效进程未运行时先预热（首次点击会多等 2 秒）
+                if not self.fx.is_alive():
+                    self.fx.warmup()
+                    time.sleep(2.5)
+                comp = self.cfg.get("completion", {})
+                # 音效
+                try:
+                    from main import BgmPlayer
+                    snd = Path(comp.get("sound_file", "assets/unbelievable.wav"))
+                    if not snd.is_absolute():
+                        snd = BASE / snd
+                    BgmPlayer(snd, 0.9).play()
+                except Exception as e:
+                    self.log(f"[通关] 音效播放失败: {e}")
+                # 胜利特效
+                if self.cfg.get("fx", {}).get("enabled", True):
+                    self.fx.start_victory(float(comp.get("fx_duration", 12)))
+            except Exception as e:
+                self.log(f"[通关] 测试失败: {e}")
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _voice_quit_game(self):
         import subprocess as sp

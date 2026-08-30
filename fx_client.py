@@ -64,6 +64,9 @@ class FxClient:
         """预启动特效进程（消除首次触发的冷启动延迟：Python/Tk 启动 + GIF 预解码）。"""
         self._ensure()
 
+    def is_alive(self) -> bool:
+        return bool(self.proc is not None and self.proc.poll() is None)
+
     def stop(self):
         self._send("stop")
 
