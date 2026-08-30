@@ -76,7 +76,9 @@
       "启动 原神": "launch_game",
       "原 神 启动": "launch_game",
       "元 神 启动": "launch_game",
-      "源 神 启动": "launch_game"
+      "源 神 启动": "launch_game",
+      "开始 检测": "start_detect",
+      "停止 检测": "stop_detect"
     }
   }
 }
