@@ -224,6 +224,60 @@ class BurstRecognizer:
         return max(0.0, score)
 
 
+# ---------------------------------------------------------------- completion
+class CompletionMonitor:
+    """幽境危战通关页持续监控：识别通关结算画面，边沿触发 + 冷却。
+    复用 BurstRecognizer（参考图 + 负样本 + 条件扣分）。"""
+
+    def __init__(self, cfg: dict):
+        c = cfg.get("completion", {})
+        self.enabled = bool(c.get("enabled", False))
+        self.check_interval = float(c.get("check_interval", 0.5))
+        self.reset_seconds = float(c.get("reset_seconds", 8))
+        self.sound_file = c.get("sound_file", "assets/unbelievable.wav")
+        self.fx_duration = float(c.get("fx_duration", 12))
+        self.recognizer = None
+        if self.enabled:
+            det = {
+                "mode": "recognition",
+                "reference": c.get("reference", "assets/completion_ref.png"),
+                "template_roi": c.get("template_roi", [0, 0, 2560, 1440]),
+                "negative_templates": c.get("negative_templates", []),
+                "neg_penalty": float(c.get("neg_penalty", 1.0)),
+                "match_threshold": float(c.get("match_threshold", 0.45)),
+                "match_frames": int(c.get("match_frames", 2)),
+                "window_seconds": 1.0,
+            }
+            self.recognizer = BurstRecognizer({"detection": det})
+            self.threshold = det["match_threshold"]
+            self.match_frames = det["match_frames"]
+        self._hits = 0
+        self._active = False
+        self._last_check = 0.0
+        self._last_trigger_at = 0.0
+
+    def update(self, frame, now: float) -> bool:
+        """每帧调用（内部按 check_interval 节流）。返回 True = 本次触发。"""
+        if self.recognizer is None:
+            return False
+        if now - self._last_check < self.check_interval:
+            return False
+        self._last_check = now
+        score = self.recognizer.check(frame)
+        if score >= self.threshold:
+            self._hits += 1
+            if (self._hits >= self.match_frames and not self._active
+                    and now - self._last_trigger_at > self.reset_seconds):
+                self._active = True
+                self._last_trigger_at = now
+                self._hits = 0
+                return True
+        else:
+            self._hits = 0
+            self._active = False
+        return False
+
+
 # ---------------------------------------------------------------- detector
 class BurstTrigger:
     def __init__(self, cfg: dict, stop_event=None, log=None, fx=None):
@@ -246,6 +300,7 @@ class BurstTrigger:
         self.window_sec = float(d.get("window_seconds", cfg.get("flash_window_seconds", 1.2)))
         self.recognizer = BurstRecognizer(cfg) if self.det_mode in ("recognition", "both") else None
         self._recog_hits = 0
+        self.completion = CompletionMonitor(cfg)
 
         import threading
         self._stop = stop_event if stop_event is not None else threading.Event()
@@ -294,12 +349,23 @@ class BurstTrigger:
         fps = self.cfg.get("capture_fps", 30)
         player = None
         listener = None
+        victory_sound = None
         try:
             camera.start(target_fps=fps, video_mode=True)
 
             # 音频路径自行解析（不依赖调用方补 audio_path 派生字段）
             player = BgmPlayer(resolve_audio(self.cfg), self.cfg.get("volume", 0.9))
             panel = PartyPanel(self.cfg)
+
+            # 通关音效（unbelievable!）
+            if self.completion.enabled and self.completion.recognizer is not None:
+                try:
+                    victory_sound = BgmPlayer(
+                        Path(self.completion.sound_file) if Path(self.completion.sound_file).is_absolute()
+                        else BASE / self.completion.sound_file, 0.9)
+                    self._log("[通关] 幽境危战通关监控已启用（等待通关结算页…）")
+                except Exception as e:
+                    self._log(f"[通关] 音效加载失败（监控仍会触发特效）: {e}")
 
             listener = keyboard.Listener(on_press=self._on_press)
             listener.start()
@@ -324,6 +390,14 @@ class BurstTrigger:
                     panel.update(frame)
                     self.last_slot = panel.active_slot
                 now = time.monotonic()
+
+                # 幽境危战通关页监控（持续，独立于 Q）
+                if self.completion.update(frame, now):
+                    self._log("[通关] 幽境危战通关！胜利特效启动 🎉")
+                    if victory_sound is not None:
+                        victory_sound.play()
+                    if self.fx is not None and self.cfg.get("fx", {}).get("enabled", True):
+                        self.fx.start_victory(self.completion.fx_duration)
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:

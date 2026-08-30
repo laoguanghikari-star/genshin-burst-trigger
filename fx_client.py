@@ -55,6 +55,11 @@ class FxClient:
         if self._ensure():
             self._send(f"start {max(1.0, float(duration))}")
 
+    def start_victory(self, duration: float = 12.0):
+        """胜利模式：小人走入 + 中央礼花。"""
+        if self._ensure():
+            self._send(f"victory {max(1.0, float(duration))}")
+
     def warmup(self):
         """预启动特效进程（消除首次触发的冷启动延迟：Python/Tk 启动 + GIF 预解码）。"""
         self._ensure()

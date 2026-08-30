@@ -56,6 +56,7 @@
     "fade_seconds": 2.0,
     "fps": 30,
     "protected_region": null,
+    "victory_gif": "assets/victory_walk.gif",
     "gif": {
       "path": "C:/Users/idolhikari/Documents/deepseek_workspace_01/output/dance27s_full.gif",
       "width": 640,
@@ -80,5 +81,22 @@
       "开始 检测": "start_detect",
       "停止 检测": "stop_detect"
     }
+  },
+  "completion": {
+    "enabled": true,
+    "reference": "assets/completion_ref.png",
+    "template_roi": [0, 0, 2560, 1440],
+    "negative_templates": [
+      "assets/completion_neg_fail.png",
+      "assets/completion_neg_select.png",
+      "assets/completion_neg_load.png"
+    ],
+    "neg_penalty": 1.0,
+    "match_threshold": 0.45,
+    "match_frames": 2,
+    "check_interval": 0.5,
+    "reset_seconds": 8,
+    "sound_file": "assets/unbelievable.wav",
+    "fx_duration": 12
   }
 }

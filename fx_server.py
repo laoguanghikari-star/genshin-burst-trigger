@@ -148,6 +148,10 @@ class LaserApp:
         self._gif_frames = []
         self._gif_fps = 20.0
         self._load_gif(cfg)
+        # 胜利模式：走入小人 + 礼花
+        self.mode = "show"  # show | victory
+        self._victory_frames = []
+        self._load_victory(cfg)
 
         # ---- tkinter 外壳（无子控件；ULW 提供全部像素）----
         self.root = tk.Tk()
@@ -232,7 +236,17 @@ class LaserApp:
                     self.duration = 57.0
                 self.t0 = time.monotonic()
                 self.running = True
+                self.mode = "show"
                 self._log(f"灯光秀开始（{self.duration:.0f}s）")
+            elif cmd[0] == "victory":
+                try:
+                    self.duration = max(1.0, float(cmd[1]))
+                except (IndexError, ValueError):
+                    self.duration = 12.0
+                self.t0 = time.monotonic()
+                self.running = True
+                self.mode = "victory"
+                self._log(f"胜利特效开始（{self.duration:.0f}s）")
             elif cmd[0] == "stop":
                 self.running = False
                 self._log("灯光秀停止")
@@ -307,6 +321,106 @@ class LaserApp:
         do()
         self.root.after(400, do)  # Tk 后续事件可能再次激活，稍后重试一次
 
+    # -- 胜利模式 GIF（透明小人） --
+    def _load_victory(self, cfg):
+        path = cfg.get("victory_gif", "assets/victory_walk.gif")
+        if not Path(path).is_absolute():
+            path = str(BASE / path)
+        if not Path(path).exists():
+            self._log(f"胜利 GIF 不存在（跳过）: {path}")
+            return
+        try:
+            from PIL import Image
+            im = Image.open(path)
+            n = getattr(im, "n_frames", 1)
+            # 显示高度 360px（2K）→ 360p 工作分辨率 90px
+            vh = 90
+            frames = []
+            for i in range(n):
+                im.seek(i)
+                fr = im.convert("RGBA")
+                ch, cw = fr.size[1], fr.size[0]
+                scale = vh / ch
+                nw = max(1, int(cw * scale))
+                fr = fr.resize((nw, vh), Image.LANCZOS)
+                arr = np.array(fr)
+                frames.append(arr[..., [2, 1, 0, 3]])  # RGB→BGR
+            self._victory_frames = frames
+            self._victory_fps = max(1.0, 1000.0 / max(20, im.info.get("duration", 33)))
+            self._log(f"胜利 GIF 已加载: {n} 帧 @{self._victory_fps:.0f}fps，尺寸 {nw}x{vh}（360p）")
+        except Exception as e:
+            self._log(f"胜利 GIF 加载失败: {e}")
+
+    def _blit_rgba(self, color, alpha, fr, x0, y0, k):
+        """把 BGRA 帧加法混合到画布（带边界裁剪）。"""
+        h, w = fr.shape[:2]
+        if x0 + w <= 0 or x0 >= RW or y0 + h <= 0 or y0 >= RH:
+            return
+        cx0, cy0 = max(0, x0), max(0, y0)
+        cx1, cy1 = min(RW, x0 + w), min(RH, y0 + h)
+        frc = fr[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
+        a255 = frc[..., 3:4].astype(np.float32) * k
+        col = frc[..., :3].astype(np.float32) * (a255 / 255.0)
+        col_u8 = np.clip(col, 0, 255).astype(np.uint8)
+        a_u8 = np.clip(a255, 0, 255).astype(np.uint8)
+        cv2.add(color[cy0:cy1, cx0:cx1], col_u8, color[cy0:cy1, cx0:cx1])
+        cv2.add(alpha[cy0:cy1, cx0:cx1], a_u8, alpha[cy0:cy1, cx0:cx1])
+
+    def _draw_victory(self, color, alpha, elapsed, k):
+        if not self._victory_frames:
+            return
+        vh = self._victory_frames[0].shape[0]
+        vw = self._victory_frames[0].shape[1]
+        y0 = int(RH * 0.30) - vh // 2
+        # 走入：3 秒内从屏幕外水平走到左右约 1/4 处，之后原地循环
+        p = min(1.0, elapsed / 3.0)
+        left_stop = int(RW * 0.13)
+        right_stop = int(RW * 0.87)
+        left_x = int(-vw + p * (left_stop + vw))
+        right_x = int(RW - p * (RW - right_stop))
+        idx = int(elapsed * self._victory_fps) % len(self._victory_frames)
+        fr = self._victory_frames[idx]
+        self._blit_rgba(color, alpha, fr, left_x, y0, k)
+        self._blit_rgba(color, alpha, np.flip(fr, axis=1), right_x, y0, k)
+        self._draw_fireworks(color, alpha, elapsed, k)
+
+    def _draw_fireworks(self, color, alpha, elapsed, k):
+        """中央礼花：三次连发，多层光环 + 拖尾，金/红/冰青。"""
+        bursts = [(1.2, (RW * 0.50, RH * 0.26)), (4.0, (RW * 0.40, RH * 0.40)), (7.0, (RW * 0.60, RH * 0.30))]
+        masks = {0: np.zeros((RH, RW), np.uint8), 1: np.zeros((RH, RW), np.uint8), 2: np.zeros((RH, RW), np.uint8)}
+        colors = [(255, 210, 110), (255, 110, 130), (160, 230, 255)]  # 金 / 红 / 冰青
+        for bi, (tb, (cx, cy)) in enumerate(bursts):
+            tt = elapsed - tb
+            if tt < 0 or tt > 2.6:
+                continue
+            fade = 1.0 - tt / 2.6
+            rings = [(0.0, 1.05), (0.35, 1.55), (0.18, 2.05)]  # (角度偏移, 速度)
+            for (aoff, spd) in rings:
+                n = 34
+                for j in range(n):
+                    ang = j * (math.tau / n) + aoff + bi * 0.35
+                    sp = spd * (0.85 + 0.3 * ((j * 37 + bi * 13) % 5) / 5.0)
+                    x = cx + math.cos(ang) * sp * tt * 30
+                    y = cy + math.sin(ang) * sp * tt * 30 + 0.50 * tt * tt * 10
+                    if 0 <= x < RW and 0 <= y < RH:
+                        ci = j % 3
+                        xi, yi = int(x), int(y)
+                        cv2.circle(masks[ci], (xi, yi), 3, int(230 * fade * k), -1)
+                        # 拖尾（从爆心拉线）
+                        txi = int(cx + math.cos(ang) * sp * max(0.0, tt - 0.15) * 30)
+                        tyi = int(cy + math.sin(ang) * sp * max(0.0, tt - 0.15) * 30 + 0.50 * max(0.0, tt - 0.15) ** 2 * 10)
+                        cv2.line(masks[ci], (xi, yi), (txi, tyi), int(120 * fade * k), 1)
+            # 爆心闪光
+            if tt < 0.35:
+                cv2.circle(masks[2], (int(cx), int(cy)), int(28 * (1 - tt / 0.35)),
+                           int(245 * (1 - tt / 0.35) * k), -1)
+        for ci, m in masks.items():
+            if m.any():
+                tmp = np.zeros((RH, RW, 3), np.uint8)
+                tmp[m > 0] = colors[ci]
+                cv2.add(color, tmp, color)
+                cv2.add(alpha, m, alpha)
+
     # ------------------------------------------------------------ 渲染
     def _render_loop(self):
         """计算帧（纯 CPU/OpenCV），不碰 Win32 窗口。"""
@@ -362,6 +476,9 @@ class LaserApp:
             self.running = False
             return
         if k <= 0.05:
+            return
+        if self.mode == "victory":
+            self._draw_victory(color, alpha, elapsed, k)
             return
         tp = elapsed  # 用总时长（连续），GIF 按自身 26 秒周期完整循环，特效不跳变
         # 探照灯固定 3 束（摆动速度/张开角做轻微呼吸变化，不改变光束数量）
