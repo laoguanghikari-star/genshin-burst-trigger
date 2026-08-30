@@ -76,16 +76,7 @@
       "启动 原神": "launch_game",
       "原 神 启动": "launch_game",
       "元 神 启动": "launch_game",
-      "源 神 启动": "launch_game",
-      "启动 游戏": "launch_game",
-      "开始 游戏": "launch_game",
-      "关闭 原神": "quit_game",
-      "退出 原神": "quit_game",
-      "打开 特效": "fx_on",
-      "关闭 特效": "fx_off",
-      "试听 音乐": "preview_music",
-      "开始 检测": "start_detect",
-      "停止 检测": "stop_detect"
+      "源 神 启动": "launch_game"
     }
   }
 }
