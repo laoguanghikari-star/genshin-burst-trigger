@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -494,8 +495,8 @@ class BurstTrigger:
         return panel.active_slot == self.target_slot
 
     def _start_fx(self, player) -> None:
-        """BGM 响起的同时启动镭射灯光秀（时长取 fx.burst_duration，默认 27 秒，
-        避免灯光长时间遮挡屏幕影响通关页检测；BGM 仍播完整首）。"""
+        """BGM 响起的同时启动镭射灯光秀（时长取 fx.burst_duration，默认 27 秒）；
+        BGM 在特效结束前同步淡出，避免长时间遮挡屏幕影响通关页检测。"""
         if self.fx is None:
             return
         fx_cfg = self.cfg.get("fx", {})
@@ -503,11 +504,24 @@ class BurstTrigger:
             return
         try:
             duration = float(fx_cfg.get("burst_duration", 27))
+            fade = float(fx_cfg.get("fade_seconds", 2.0))
             self.fx.start(duration)
             self._fx_until = time.monotonic() + duration + 2.0  # 特效期间暂停通关检测
-            self._log(f"[特效] 镭射灯光秀启动（{duration:.0f}s，BGM 继续播放）")
+            self._log(f"[特效] 镭射灯光秀启动（{duration:.0f}s），BGM 同步淡出")
+            # 特效淡出前 fade 秒开始淡出 BGM，与灯光收尾同步
+            threading.Timer(max(0.1, duration - fade), self._fade_out_bgm,
+                            args=(player, fade)).start()
         except Exception as e:
             self._log(f"[特效] 启动失败: {e}")
+
+    @staticmethod
+    def _fade_out_bgm(player, fade: float) -> None:
+        """让 BGM 在 fade 毫秒内淡出（pygame channel.fadeout 非阻塞）。"""
+        try:
+            if player.channel is not None:
+                player.channel.fadeout(int(fade * 1000))
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------- entry
