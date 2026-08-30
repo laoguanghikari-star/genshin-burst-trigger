@@ -25,7 +25,10 @@
       "assets/neg_qiqi.png",
       "assets/neg_qiqi2.png",
       "assets/neg_sandrone.png",
-      "assets/neg_sandrone2.png"
+      "assets/neg_sandrone2.png",
+      "assets/neg_mavuika01.png",
+      "assets/neg_mavuika02.png",
+      "assets/neg_citlali01.png"
     ],
     "neg_penalty": 1.0,
     "match_threshold": 0.55,
@@ -68,7 +71,7 @@
     }
   },
   "voice": {
-    "enabled": true,
+    "enabled": false,
     "model_path": "models/vosk-model-small-cn-0.22",
     "device": null,
     "game_path": "C:/Program Files/miHoYo Launcher/games/Genshin Impact Game/YuanShen.exe",
