@@ -291,7 +291,7 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------ victory
     def _test_victory(self):
-        """测试通关庆祝：Unbelievable 音效 + 胜利特效（无需真通关）。"""
+        """测试通关庆祝：Unbelievable 音效 → 通关 BGM → 胜利特效（无需真通关）。"""
         self.log("[通关] 测试按钮：播放庆祝特效")
 
         def work():
@@ -301,18 +301,45 @@ class App(tk.Tk):
                     self.fx.warmup()
                     time.sleep(2.5)
                 comp = self.cfg.get("completion", {})
-                # 音效
-                try:
-                    from main import BgmPlayer
-                    snd = Path(comp.get("sound_file", "assets/unbelievable.wav"))
-                    if not snd.is_absolute():
-                        snd = BASE / snd
-                    BgmPlayer(snd, 0.9).play()
-                except Exception as e:
-                    self.log(f"[通关] 音效播放失败: {e}")
-                # 胜利特效
+                fx_dur = float(comp.get("fx_duration", 12))
+                fade = float(self.cfg.get("fx", {}).get("fade_seconds", 2.0))
+                fade_delay = float(comp.get("bgm_fade_delay_seconds", 2.0))
+                from main import BgmPlayer
+                # 上一次的 BGM 若还在放，先快速收掉
+                prev = getattr(self, "_victory_bgm", None)
+                if prev is not None and prev.is_playing():
+                    try:
+                        prev.channel.fadeout(300)
+                    except Exception:
+                        pass
+                # 音效（unbelievable!）与胜利特效同时启动
+                snd = Path(comp.get("sound_file", "assets/unbelievable.wav"))
+                if not snd.is_absolute():
+                    snd = BASE / snd
+                player = BgmPlayer(snd, 0.9)
+                t0 = time.time()
+                player.play()
                 if self.cfg.get("fx", {}).get("enabled", True):
-                    self.fx.start_victory(float(comp.get("fx_duration", 12)))
+                    self.fx.start_victory(fx_dur)
+                # 音效放完 → 接通关 BGM
+                bgm = None
+                bgm_path = Path(comp.get("bgm_file", "assets/victory_bgm.wav"))
+                if not bgm_path.is_absolute():
+                    bgm_path = BASE / bgm_path
+                if bgm_path.exists():
+                    bgm = BgmPlayer(bgm_path, 0.9)
+                    self._victory_bgm = bgm
+                if bgm is not None:
+                    while player.is_playing():
+                        time.sleep(0.05)
+                    bgm.play()
+                    self.log("[通关] BGM 开始播放（unbelievable 之后）")
+                # 特效结束后 fade_delay 秒，BGM 开始淡出
+                wait = max(0.0, t0 + fx_dur + fade_delay - time.time())
+                time.sleep(wait)
+                if bgm is not None and bgm.channel is not None:
+                    bgm.channel.fadeout(int(fade * 1000))
+                    self.log("[通关] BGM 淡出（特效已结束 2 秒）")
             except Exception as e:
                 self.log(f"[通关] 测试失败: {e}")
 

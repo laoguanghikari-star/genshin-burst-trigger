@@ -352,6 +352,7 @@ class BurstTrigger:
         player = None
         listener = None
         victory_sound = None
+        victory_bgm = None
         try:
             camera.start(target_fps=fps, video_mode=True)
 
@@ -368,6 +369,20 @@ class BurstTrigger:
                     self._log("[通关] 幽境危战通关监控已启用（等待通关结算页…）")
                 except Exception as e:
                     self._log(f"[通关] 音效加载失败（监控仍会触发特效）: {e}")
+            # 通关 BGM（unbelievable 结束后播放，特效结束后延迟淡出）
+            if self.completion.enabled:
+                try:
+                    comp = self.cfg.get("completion", {})
+                    bgm_path = Path(comp.get("bgm_file", "assets/victory_bgm.wav"))
+                    if not bgm_path.is_absolute():
+                        bgm_path = BASE / bgm_path
+                    if bgm_path.exists():
+                        victory_bgm = BgmPlayer(bgm_path, 0.9)
+                        self._log("[通关] 通关 BGM 已加载（unbelievable 之后播放）")
+                    else:
+                        self._log(f"[通关] BGM 文件不存在（跳过）: {bgm_path}")
+                except Exception as e:
+                    self._log(f"[通关] BGM 加载失败（跳过）: {e}")
 
             listener = keyboard.Listener(on_press=self._on_press)
             listener.start()
@@ -396,11 +411,7 @@ class BurstTrigger:
                 # 幽境危战通关页监控（持续，独立于 Q；特效播放期间暂停，避免灯光干扰识别）
                 if now >= self._fx_until and self.completion.update(frame, now):
                     self._log("[通关] 幽境危战通关！胜利特效启动 🎉")
-                    if victory_sound is not None:
-                        victory_sound.play()
-                    if self.fx is not None and self.cfg.get("fx", {}).get("enabled", True):
-                        self.fx.start_victory(self.completion.fx_duration)
-                        self._fx_until = now + self.completion.fx_duration + 2.0
+                    self._start_victory(victory_sound, victory_bgm)
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:
@@ -493,6 +504,31 @@ class BurstTrigger:
     def active_slot_ok(self, panel: PartyPanel) -> bool:
         """出战角色 == 目标槽位 才允许触发；判定未知时默认不触发（安全优先）。"""
         return panel.active_slot == self.target_slot
+
+    def _start_victory(self, victory_sound, victory_bgm) -> None:
+        """通关庆祝序列：胜利特效 + unbelievable 音效 → 音效结束接 BGM →
+        特效结束后 bgm_fade_delay_seconds 秒开始淡出（与 fx.fade_seconds 同长）。"""
+        comp = self.cfg.get("completion", {})
+        fx_dur = float(comp.get("fx_duration", 12))
+        if self.fx is not None and self.cfg.get("fx", {}).get("enabled", True):
+            self.fx.start_victory(fx_dur)
+            self._fx_until = time.monotonic() + fx_dur + 2.0
+        # 上一次的 BGM 若还在放，先快速收掉，避免叠音
+        if victory_bgm is not None and victory_bgm.is_playing():
+            try:
+                victory_bgm.channel.fadeout(300)
+            except Exception:
+                pass
+        if victory_sound is not None:
+            victory_sound.play()
+            if victory_bgm is not None:
+                length = victory_sound.sound.get_length()
+                threading.Timer(max(0.1, length + 0.05), victory_bgm.play).start()
+        if victory_bgm is not None:
+            fade_delay = float(comp.get("bgm_fade_delay_seconds", 2.0))
+            fade = float(self.cfg.get("fx", {}).get("fade_seconds", 2.0))
+            threading.Timer(max(0.1, fx_dur + fade_delay), self._fade_out_bgm,
+                            args=(victory_bgm, fade)).start()
 
     def _start_fx(self, player) -> None:
         """BGM 响起的同时启动镭射灯光秀（时长取 fx.burst_duration，默认 27 秒）；

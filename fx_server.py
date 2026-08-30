@@ -54,6 +54,17 @@ PALETTE = [
 ]
 WHITE = (255, 255, 255)
 
+# ---- 胜利礼花配色（BGR）：每朵礼花必带金 + 红，其余从彩池随机补充 ----
+GOLD = (80, 205, 255)        # 金
+RED = (110, 95, 255)         # 红
+FIREWORK_EXTRAS = [
+    (60, 150, 255),          # 橙
+    (215, 95, 255),          # 品红
+    (255, 130, 205),         # 紫
+    (255, 225, 160),         # 冰青
+    (240, 245, 255),         # 暖白
+]
+
 WS_EX_LAYERED = 0x80000
 WS_EX_TRANSPARENT = 0x20
 WS_EX_TOOLWINDOW = 0x80
@@ -152,6 +163,8 @@ class LaserApp:
         self.mode = "show"  # show | victory
         self._victory_frames = []
         self._load_victory(cfg)
+        # 礼花编组（发射-上升-爆炸完整过程，金红必带 + 彩池补充）
+        self._fireworks = self._make_fireworks()
 
         # ---- tkinter 外壳（无子控件；ULW 提供全部像素）----
         self.root = tk.Tk()
@@ -379,42 +392,106 @@ class LaserApp:
         self._blit_rgba(color, alpha, np.flip(fr, axis=1), right_x, y0, k)
         self._draw_fireworks(color, alpha, elapsed, k)
 
+    def _make_fireworks(self) -> list[dict]:
+        """生成礼花编组：8 朵错峰发射；每朵必带金 + 红，另随机补 2 种彩池色。"""
+        rnd = self._rand
+        fws = []
+        for i in range(8):
+            fws.append({
+                "launch": 0.7 + i * 1.45 + rnd.uniform(-0.1, 0.1),
+                "x0": RW * rnd.uniform(0.06, 0.94),   # 发射点（屏幕底部）
+                "y0": RH + 14,
+                "cx": RW * rnd.uniform(0.16, 0.84),   # 爆点
+                "cy": RH * rnd.uniform(0.16, 0.40),
+                "rise": rnd.uniform(0.95, 1.35),      # 上升时长
+                "scale": rnd.uniform(1.25, 1.6),      # 爆炸大小
+                "colors": [GOLD, RED] + rnd.sample(FIREWORK_EXTRAS, 2),
+                "spin": rnd.uniform(0, math.tau),
+            })
+        return fws
+
     def _draw_fireworks(self, color, alpha, elapsed, k):
-        """中央礼花：三次连发，多层光环 + 拖尾，金/红/冰青。"""
-        bursts = [(1.2, (RW * 0.50, RH * 0.26)), (4.0, (RW * 0.40, RH * 0.40)), (7.0, (RW * 0.60, RH * 0.30))]
-        masks = {0: np.zeros((RH, RW), np.uint8), 1: np.zeros((RH, RW), np.uint8), 2: np.zeros((RH, RW), np.uint8)}
-        colors = [(255, 210, 110), (255, 110, 130), (160, 230, 255)]  # 金 / 红 / 冰青
-        for bi, (tb, (cx, cy)) in enumerate(bursts):
-            tt = elapsed - tb
-            if tt < 0 or tt > 2.6:
+        """礼花齐放：先见火箭拖着金红尾焰升空，到顶炸成多层光环。"""
+        for fw in self._fireworks:
+            t = elapsed - fw["launch"]
+            if t < 0:
                 continue
-            fade = 1.0 - tt / 2.6
-            rings = [(0.0, 1.05), (0.35, 1.55), (0.18, 2.05)]  # (角度偏移, 速度)
-            for (aoff, spd) in rings:
-                n = 34
-                for j in range(n):
-                    ang = j * (math.tau / n) + aoff + bi * 0.35
-                    sp = spd * (0.85 + 0.3 * ((j * 37 + bi * 13) % 5) / 5.0)
-                    x = cx + math.cos(ang) * sp * tt * 30
-                    y = cy + math.sin(ang) * sp * tt * 30 + 0.50 * tt * tt * 10
-                    if 0 <= x < RW and 0 <= y < RH:
-                        ci = j % 3
-                        xi, yi = int(x), int(y)
-                        cv2.circle(masks[ci], (xi, yi), 3, int(230 * fade * k), -1)
-                        # 拖尾（从爆心拉线）
-                        txi = int(cx + math.cos(ang) * sp * max(0.0, tt - 0.15) * 30)
-                        tyi = int(cy + math.sin(ang) * sp * max(0.0, tt - 0.15) * 30 + 0.50 * max(0.0, tt - 0.15) ** 2 * 10)
-                        cv2.line(masks[ci], (xi, yi), (txi, tyi), int(120 * fade * k), 1)
-            # 爆心闪光
-            if tt < 0.35:
-                cv2.circle(masks[2], (int(cx), int(cy)), int(28 * (1 - tt / 0.35)),
-                           int(245 * (1 - tt / 0.35) * k), -1)
+            if t < fw["rise"]:
+                self._draw_rocket(color, alpha, t, k, fw)
+            else:
+                self._draw_burst(color, alpha, t - fw["rise"], k, fw)
+
+    def _draw_rocket(self, color, alpha, t, k, fw):
+        """火箭上升：加速爬升 + 金红交替尾焰拖尾 + 白亮弹头。"""
+        r = fw["rise"]
+        p = min(1.0, t / r)
+        pe = p * p  # 加速感
+        x = fw["x0"] + (fw["cx"] - fw["x0"]) * pe
+        y = fw["y0"] + (fw["cy"] - fw["y0"]) * pe
+        mg = np.zeros((RH, RW), np.uint8)  # 金
+        mr = np.zeros((RH, RW), np.uint8)  # 红
+        for s in range(1, 9):
+            ps = (t - s * 0.03) / r
+            if ps <= 0:
+                break
+            xs = fw["x0"] + (fw["cx"] - fw["x0"]) * ps * ps
+            ys = fw["y0"] + (fw["cy"] - fw["y0"]) * ps * ps
+            a = int((100 - s * 9) * k)
+            if a > 0:
+                cv2.line(mr if s % 2 else mg, (int(x), int(y)), (int(xs), int(ys)),
+                         a, max(1, int(2.4 - s * 0.2)))
+        # 弹头下方两团尾焰光点
+        cv2.circle(mr, (int(x - 2), int(y + 2)), 2, int(190 * k), -1)
+        cv2.circle(mg, (int(x + 2), int(y + 2)), 2, int(190 * k), -1)
+        cv2.circle(mg, (int(x), int(y + 3)), 2, int(190 * k), -1)
+        self._blit_mask(color, alpha, mg, GOLD)
+        self._blit_mask(color, alpha, mr, RED)
+        mw = np.zeros((RH, RW), np.uint8)
+        cv2.circle(mw, (int(x), int(y)), 3, int(255 * k), -1)
+        self._blit_mask(color, alpha, mw, WHITE)
+
+    def _draw_burst(self, color, alpha, tt, k, fw):
+        """爆炸：爆心金白闪光 + 三层金红光环扩散 + 拖尾，大而华丽。"""
+        if tt > 2.9:
+            return
+        fade = 1.0 - tt / 2.9
+        sc = fw["scale"]
+        cx, cy = fw["cx"], fw["cy"]
+        colors = fw["colors"]
+        masks = {i: np.zeros((RH, RW), np.uint8) for i in range(len(colors))}
+        n = 40
+        rings = [(0.0, 1.0), (0.38, 1.5), (0.17, 2.0)]  # (角度偏移, 速度倍率)
+        for (aoff, spd) in rings:
+            for j in range(n):
+                ang = j * (math.tau / n) + aoff + fw["spin"]
+                sp = spd * (0.82 + 0.32 * ((j * 37) % 5) / 5.0)
+                x = cx + math.cos(ang) * sp * tt * 35 * sc
+                y = cy + math.sin(ang) * sp * tt * 34 * sc + 6.0 * tt * tt
+                if 0 <= x < RW and 0 <= y < RH:
+                    ci = j % len(colors)
+                    xi, yi = int(x), int(y)
+                    cv2.circle(masks[ci], (xi, yi), 3, int(235 * fade * k), -1)
+                    # 拖尾（从爆心拉线）
+                    ttx = max(0.0, tt - 0.16)
+                    txi = int(cx + math.cos(ang) * sp * ttx * 35 * sc)
+                    tyi = int(cy + math.sin(ang) * sp * ttx * 35 * sc + 6.0 * ttx * ttx)
+                    cv2.line(masks[ci], (xi, yi), (txi, tyi), int(130 * fade * k), 1)
+        # 爆心闪光（金 + 红双层）
+        if tt < 0.4:
+            flash = int(250 * (1 - tt / 0.4) * k)
+            cv2.circle(masks[0], (int(cx), int(cy)), int(30 * sc * (1 - tt / 0.4)), flash, -1)
+            cv2.circle(masks[1], (int(cx), int(cy)), int(16 * sc * (1 - tt / 0.4)), flash, -1)
         for ci, m in masks.items():
-            if m.any():
-                tmp = np.zeros((RH, RW, 3), np.uint8)
-                tmp[m > 0] = colors[ci]
-                cv2.add(color, tmp, color)
-                cv2.add(alpha, m, alpha)
+            self._blit_mask(color, alpha, m, colors[ci])
+
+    @staticmethod
+    def _blit_mask(color, alpha, m, bgr):
+        """把单色蒙版加法叠到画布上。"""
+        if m.any():
+            tmp = np.zeros((RH, RW, 3), np.uint8)
+            tmp[m > 0] = bgr
+            cv2.add(color, tmp, color)
+            cv2.add(alpha, m, alpha)
 
     # ------------------------------------------------------------ 渲染
     def _render_loop(self):
