@@ -70,6 +70,7 @@
     "victory_frames": "assets/victory_frames.npz",
     "fire_frames": "assets/mavuika_fire_frames.npz",
     "paimon_frames": "assets/paimon_frames.npz",
+    "paimon_intensity": 1.15,
     "gif": {
       "path": "C:/Users/idolhikari/Documents/deepseek_workspace_01/output/dance27s_full.gif",
       "width": 640,

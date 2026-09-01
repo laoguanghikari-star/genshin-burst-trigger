@@ -170,6 +170,7 @@ class LaserApp:
         # 派蒙迎接视频（绿幕抠像帧序列，启动读满播放一次）
         self._paimon_frames = []
         self._paimon_fps = 24.0
+        self._paimon_gain = float(cfg.get("paimon_intensity", 1.15))
         self._load_paimon(cfg)
         # 礼花编组（发射-上升-爆炸完整过程，金红必带 + 彩池补充）
         self._fireworks = self._make_fireworks()
@@ -615,7 +616,9 @@ class LaserApp:
             self.root.after(16, self._tick_frame)
 
     def _compose(self, color, alpha) -> np.ndarray:
-        k = self.intensity
+        # 派蒙模式用专属不透明度增益抵消全局灯光强度（默认 0.87），
+        # 让派蒙本体实心不透明；其他特效维持原样
+        k = self.intensity * (self._paimon_gain if self.mode == "paimon" else 1.0)
         a = cv2.multiply(alpha, np.array([k])) if k < 1.0 else alpha
         a = cv2.GaussianBlur(a, (0, 0), 2.5)
         af = a.astype(np.float32) / 255.0
