@@ -71,6 +71,13 @@
     "fire_frames": "assets/mavuika_fire_frames.npz",
     "paimon_frames": "assets/paimon_frames.npz",
     "paimon_intensity": 1.15,
+    "shop_kong": "assets/xujia_kong.png",
+    "shop_ying": "assets/xujia_ying.png",
+    "shop_text": [
+      "许家空和许家萤提醒您",
+      "适度游戏，理性消费"
+    ],
+    "shop_font_size": 30,
     "gif": {
       "path": "C:/Users/idolhikari/Documents/deepseek_workspace_01/output/dance27s_full.gif",
       "width": 640,

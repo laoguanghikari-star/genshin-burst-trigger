@@ -70,6 +70,11 @@ class FxClient:
         if self._ensure():
             self._send(f"paimon {max(0.5, float(duration))}")
 
+    def start_shop(self, duration: float = 600.0):
+        """商城立绘：许家空/许家萤左右立绘 + 中央警示语（随 BGM 启停）。"""
+        if self._ensure():
+            self._send(f"shopfx {max(1.0, float(duration))}")
+
     def warmup(self):
         """预启动特效进程（消除首次触发的冷启动延迟：Python/Tk 启动 + GIF 预解码）。"""
         self._ensure()

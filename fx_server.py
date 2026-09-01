@@ -172,6 +172,11 @@ class LaserApp:
         self._paimon_fps = 24.0
         self._paimon_gain = float(cfg.get("paimon_intensity", 1.15))
         self._load_paimon(cfg)
+        # 商城立绘（朋友的酒特效：许家空/许家萤 + 警示语，随 BGM 启停）
+        self._shop_kong = None
+        self._shop_ying = None
+        self._shop_text = None
+        self._load_shop(cfg)
         # 礼花编组（发射-上升-爆炸完整过程，金红必带 + 彩池补充）
         self._fireworks = self._make_fireworks()
 
@@ -287,8 +292,21 @@ class LaserApp:
                 self.running = True
                 self.mode = "paimon"
                 self._log(f"派蒙迎接视频开始（{self.duration:.1f}s，播放一次）")
+            elif cmd[0] == "shopfx":
+                try:
+                    self.duration = max(1.0, float(cmd[1]))
+                except (IndexError, ValueError):
+                    self.duration = 600.0
+                self.t0 = time.monotonic()
+                self.running = True
+                self.mode = "shopfx"
+                self._log(f"许家空/许家萤立绘开始（最长 {self.duration:.0f}s）")
             elif cmd[0] == "stop":
-                self.running = False
+                if self.mode == "shopfx" and self.running:
+                    # 商城立绘优雅淡出（fade 秒）后自动停止，不瞬间消失
+                    self.duration = time.monotonic() - self.t0
+                else:
+                    self.running = False
                 self._log("灯光秀停止")
             elif cmd[0] == "quit":
                 self.running = False
@@ -449,6 +467,69 @@ class LaserApp:
         if idx >= len(self._paimon_frames):
             return
         self._blit_rgba(color, alpha, self._paimon_frames[idx], 0, 0, k)
+
+    # -- 商城立绘（朋友的酒：许家空/许家萤 + 警示语） --
+    def _load_shop(self, cfg):
+        for attr, key in (("_shop_kong", "shop_kong"), ("_shop_ying", "shop_ying")):
+            path = cfg.get(key, "")
+            if not path:
+                continue
+            p = Path(path)
+            if not p.is_absolute():
+                p = BASE / p
+            if not p.exists():
+                self._log(f"商城立绘不存在（跳过）: {p}")
+                continue
+            try:
+                from PIL import Image as PILImage
+                im = PILImage.open(p).convert("RGBA")
+                th = 150  # 360p 的 ~42% 高
+                tw = max(1, int(im.width * th / im.height))
+                im = im.resize((tw, th), PILImage.LANCZOS)
+                arr = np.array(im)
+                setattr(self, attr, arr[..., [2, 1, 0, 3]])  # RGBA→BGRA
+                self._log(f"商城立绘已加载: {p.name} {tw}x{th}")
+            except Exception as e:
+                self._log(f"商城立绘加载失败: {e}")
+        try:
+            lines = cfg.get("shop_text", ["许家空和许家萤提醒您", "适度游戏，理性消费"])
+            size = int(cfg.get("shop_font_size", 30))
+            self._shop_text = self._render_shop_text(lines, size)
+            self._log(f"商城警示语已渲染: {lines[0]} / {lines[1]}")
+        except Exception as e:
+            self._log(f"警示语渲染失败: {e}")
+
+    @staticmethod
+    def _render_shop_text(lines, size):
+        """黑体红色大字 + 黑色描边（两行居中），返回 BGRA。"""
+        from PIL import Image, ImageDraw, ImageFont
+        font = ImageFont.truetype(str(Path("C:/Windows/Fonts/simhei.ttf")), size)
+        tmp = Image.new("RGBA", (8, 8))
+        td = ImageDraw.Draw(tmp)
+        ws = [td.textlength(t, font=font) for t in lines]
+        w = int(max(ws)) + 12
+        line_h = int(size * 1.4)
+        h = line_h * len(lines) + 8
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        for i, t in enumerate(lines):
+            tw = d.textlength(t, font=font)
+            d.text(((w - tw) / 2, 4 + i * line_h), t, font=font,
+                   fill=(255, 0, 0, 255), stroke_width=3, stroke_fill=(20, 20, 20, 255))
+        arr = np.array(img)
+        return arr[..., [2, 1, 0, 3]]
+
+    def _draw_shop(self, color, alpha, elapsed, k):
+        """许家空/许家萤左右立绘（中偏下）+ 中央警示语（中偏下）。"""
+        ky = int(RH * 0.52)
+        if self._shop_kong is not None:
+            self._blit_rgba(color, alpha, self._shop_kong, 24, ky, k)
+        if self._shop_ying is not None:
+            w = self._shop_ying.shape[1]
+            self._blit_rgba(color, alpha, self._shop_ying, RW - 24 - w, ky, k)
+        if self._shop_text is not None:
+            th, tw = self._shop_text.shape[:2]
+            self._blit_rgba(color, alpha, self._shop_text, (RW - tw) // 2, int(RH * 0.76), k)
 
     def _blit_rgba(self, color, alpha, fr, x0, y0, k):
         """把 BGRA 帧加法混合到画布（带边界裁剪）。"""
@@ -651,6 +732,9 @@ class LaserApp:
         if self.mode == "paimon":
             self._draw_paimon(color, alpha, elapsed, k)
             return
+        if self.mode == "shopfx":
+            self._draw_shop(color, alpha, elapsed, k)
+            return
         tp = elapsed  # 用总时长（连续），GIF 按自身 26 秒周期完整循环，特效不跳变
         # 探照灯固定 3 束（摆动速度/张开角做轻微呼吸变化，不改变光束数量）
         swing = 0.09 + 0.02 * math.sin(tp * 0.4)
@@ -783,7 +867,7 @@ def main():
             secs = float(d) if d else 4.0
         except ValueError:
             secs = 4.0
-        app.cmd_queue.append(f"{mode} {secs}" if mode in ("fire", "paimon") else f"start {secs}")
+        app.cmd_queue.append(f"{mode} {secs}" if mode in ("fire", "paimon", "shopfx") else f"start {secs}")
         deadline = time.monotonic() + secs + 3.0
     else:
         deadline = None
