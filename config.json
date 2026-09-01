@@ -14,7 +14,10 @@
   "use_slot_check": false,
   "detection": {
     "mode": "recognition",
-    "reference": "assets/burst_ref.png",
+    "reference": [
+      "assets/burst_ref.png",
+      "assets/burst_ref_late.png"
+    ],
     "template_roi": [
       768,
       288,
@@ -152,6 +155,7 @@
       "assets/neg_sandrone2.png",
       "assets/neg_citlali01.png",
       "assets/burst_ref.png",
+      "assets/burst_ref_late.png",
       "assets/columbina_ref01.png",
       "assets/columbina_ref02.png",
       "assets/columbina_ref03.png",
@@ -199,6 +203,7 @@
       "assets/neg_mavuika02.png",
       "assets/neg_citlali01.png",
       "assets/burst_ref.png",
+      "assets/burst_ref_late.png",
       "assets/neg_party_setup01.png"
     ],
     "neg_penalty": 1.0,
