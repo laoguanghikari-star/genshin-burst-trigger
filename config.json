@@ -240,6 +240,8 @@
     "white_ratio": 0.9,
     "trigger_ratio": 0.11,
     "release_ratio": 0.06,
+    "min_clusters": 5,
+    "margin_white": 0.995,
     "match_frames": 2,
     "check_interval": 0.5,
     "cooldown_seconds": 60,

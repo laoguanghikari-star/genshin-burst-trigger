@@ -392,9 +392,14 @@ class StartupMonitor:
 
     加载屏特征（实测 2560x1440）：
       - 整屏近乎纯白（>90% 像素亮度 >240）
-      - 中央元素图标带（灰色）随加载进度由细变满：
-        未满约 2.5% 深色覆盖（启动界面02），读满约 15.6%（启动界面01）
-    双重条件判定：整体纯白 + 图标带深色覆盖 ≥ trigger_ratio（连续 match_frames 次）
+      - 中央元素图标带（灰色，从左到右逐个出现）随加载进度变满：
+        未满约 2.2% 深色覆盖（启动界面02），读满约 13.7%（启动界面01）
+    四重条件判定（全部满足才触发，连续 match_frames 次）：
+      1) 整屏纯白 ≥ white_ratio        —— 拦截一切游戏/菜单画面
+      2) 图标带深色覆盖 ≥ trigger_ratio —— 「读满」
+      3) 图标带深色列簇数 ≥ min_clusters —— 元素图标行 5~7 个分离簇；
+         mihoyo/原神 logo 只有 1~3 个宽簇
+      4) 图标带上下边缘区域纯白 ≥ margin_white —— 竖排大 logo 会越出图标带
     读满后触发一次；cooldown 防止同一次启动重复触发。"""
 
     def __init__(self, cfg: dict):
@@ -405,6 +410,8 @@ class StartupMonitor:
         self.white_ratio = float(s.get("white_ratio", 0.9))
         self.trigger_ratio = float(s.get("trigger_ratio", 0.11))
         self.release_ratio = float(s.get("release_ratio", 0.06))
+        self.min_clusters = int(s.get("min_clusters", 5))
+        self.margin_white = float(s.get("margin_white", 0.995))
         self.match_frames = int(s.get("match_frames", 2))
         self.cooldown = float(s.get("cooldown_seconds", 60.0))
         self._hits = 0
@@ -419,6 +426,36 @@ class StartupMonitor:
         gray = band[..., 0] * 0.114 + band[..., 1] * 0.587 + band[..., 2] * 0.299
         return float((gray < 200).mean())
 
+    def _band_clusters(self, frame) -> int:
+        """图标带内深色列簇数：元素图标行（从左到右逐个出现）= 5~7 个分离簇；
+        米哈游/原神 logo 为 1~3 个宽簇。用于区分标志界面与读条界面。"""
+        x, y, w, h = self.icon_roi
+        band = frame[y : y + h, x : x + w]
+        gray = band[..., 0] * 0.114 + band[..., 1] * 0.587 + band[..., 2] * 0.299
+        col = (gray < 200).sum(axis=0)
+        xs = np.where(col > 10)[0]
+        if len(xs) == 0:
+            return 0
+        n = 1
+        prev = xs[0]
+        for xx in xs[1:]:
+            if xx - prev > 25:
+                n += 1
+            prev = xx
+        return n
+
+    def _margin_white(self, frame) -> float:
+        """图标带上下边缘区域的纯白占比（取两者较小值）。
+        读条界面上下纯白；竖排大 logo（米哈游/原神）越出图标带 → 显著下降。"""
+        x, y, w, h = self.icon_roi
+        hf, wf = frame.shape[:2]
+        gray = frame[..., 0] * 0.114 + frame[..., 1] * 0.587 + frame[..., 2] * 0.299
+        up = gray[max(0, y - 160) : max(0, y - 30), x : min(wf, x + w)]
+        dn = gray[min(hf, y + h + 30) : min(hf, y + h + 160), x : min(wf, x + w)]
+        a = float((up > 240).mean())
+        b = float((dn > 240).mean())
+        return min(a, b)
+
     def update(self, frame, now: float) -> bool:
         """每帧调用（内部节流）。返回 True = 读满边沿触发。"""
         if not self.enabled:
@@ -429,7 +466,10 @@ class StartupMonitor:
         gray = frame[..., 0] * 0.114 + frame[..., 1] * 0.587 + frame[..., 2] * 0.299
         white = float((gray > 240).mean())
         cov = self._band_coverage(frame)
-        if white >= self.white_ratio and cov >= self.trigger_ratio:
+        ncl = self._band_clusters(frame)
+        mw = self._margin_white(frame)
+        if (white >= self.white_ratio and cov >= self.trigger_ratio
+                and ncl >= self.min_clusters and mw >= self.margin_white):
             self._hits += 1
             if (self._hits >= self.match_frames and not self._active
                     and now - self._last_trigger_at > self.cooldown):
