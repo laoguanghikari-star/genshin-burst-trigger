@@ -201,7 +201,7 @@ class BurstRecognizer:
 
     @staticmethod
     def _shrink(tpl) -> np.ndarray:
-        return cv2.resize(tpl, (tpl.shape[1] // 4, tpl.shape[0] // 4))
+        return cv2.resize(tpl, (tpl.shape[1] // 8, tpl.shape[0] // 8))
 
     @property
     def ready(self) -> bool:
@@ -230,14 +230,19 @@ class BurstRecognizer:
         return float(mask.mean())
 
     def _match(self, gi, tpl) -> float:
-        """¼ 灰度帧上的模板匹配（模板已预缩放）。"""
+        """⅛ 灰度帧上的模板匹配（模板已预缩放）。⅛ 尺度与 ¼ 分数几乎一致
+        （实测偏差 <0.01），但快约 4 倍——三角色识别器合计量从 ~200ms/帧
+        降到 ~53ms/帧，显著降低触发延迟。"""
         return max(0.0, float(cv2.matchTemplate(gi, tpl, cv2.TM_CCOEFF_NORMED).max()))
 
     @staticmethod
     def _prepare(frame):
-        """帧预处理：¼ 缩放 + 灰度（多个识别器可共享，省重复计算）。"""
+        """帧预处理：¼ 小图（ice/hist 用）+ ⅛ 灰度（模板匹配用）。
+        多个识别器共享，省重复计算。"""
         small = cv2.resize(frame, (frame.shape[1] // 4, frame.shape[0] // 4))
-        return small, cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        gi = cv2.cvtColor(cv2.resize(frame, (frame.shape[1] // 8, frame.shape[0] // 8)),
+                          cv2.COLOR_BGR2GRAY)
+        return small, gi
 
     def check(self, frame, shared=None, baseline=None) -> float:
         """组合评分 0-1；未就绪返回 0。多参考图取最大得分。
@@ -693,42 +698,45 @@ class BurstTrigger:
                     self.last_slot = panel.active_slot
                 now = time.monotonic()
 
-                # 幽境危战通关页监控（持续，独立于 Q；特效播放期间暂停，避免灯光干扰识别）
-                if now >= self._fx_until and self.completion.update(frame, now):
-                    self._log("[通关] 幽境危战通关！胜利特效启动 🎉")
-                    self._start_victory(victory_sound, victory_bgm)
+                # 持续监控（通关/商城/启动）：仅在非确认窗口期运行——
+                # 确认窗口（Q 后 2.5s）内爆发识别优先级最高，避免监控抢帧拖慢触发
+                if self._q_pending_at is None:
+                    # 幽境危战通关页监控（持续，独立于 Q；特效播放期间暂停，避免灯光干扰识别）
+                    if now >= self._fx_until and self.completion.update(frame, now):
+                        self._log("[通关] 幽境危战通关！胜利特效启动 🎉")
+                        self._start_victory(victory_sound, victory_bgm)
 
-                # 商城创世结晶购买页监控（持续，独立于 Q；特效播放期间暂停）
-                if now >= self._fx_until:
-                    enter, leave = self.shop.update(frame, now)
-                    if enter:
-                        if shop_player is not None and not shop_player.is_playing():
-                            shop_player.play(loops=-1)
-                            self._log("[商城] 检测到创世结晶购买页！《朋友的酒》开始循环播放")
-                    elif leave:
-                        if shop_player is not None and shop_player.is_playing():
+                    # 商城创世结晶购买页监控（持续，独立于 Q；特效播放期间暂停）
+                    if now >= self._fx_until:
+                        enter, leave = self.shop.update(frame, now)
+                        if enter:
+                            if shop_player is not None and not shop_player.is_playing():
+                                shop_player.play(loops=-1)
+                                self._log("[商城] 检测到创世结晶购买页！《朋友的酒》开始循环播放")
+                        elif leave:
+                            if shop_player is not None and shop_player.is_playing():
+                                try:
+                                    fade = float(self.cfg.get("shop", {}).get("fade_seconds", 1.5))
+                                    shop_player.channel.fadeout(int(fade * 1000))
+                                except Exception:
+                                    pass
+                                self._log("[商城] 已离开购买页，BGM 淡出停止")
+
+                    # 启动加载屏「元素读条读满」监控 → 派蒙迎接视频（播放一次）
+                    if now >= self._fx_until and self.startup.update(frame, now):
+                        sp = self.cfg.get("startup", {})
+                        dur = float(sp.get("paimon_duration", 10.0))
+                        fx_cfg = self.cfg.get("fx", {})
+                        if (self.fx is not None and fx_cfg.get("enabled", True)
+                                and fx_cfg.get("paimon_frames")):
                             try:
-                                fade = float(self.cfg.get("shop", {}).get("fade_seconds", 1.5))
-                                shop_player.channel.fadeout(int(fade * 1000))
-                            except Exception:
-                                pass
-                            self._log("[商城] 已离开购买页，BGM 淡出停止")
-
-                # 启动加载屏「元素读条读满」监控 → 派蒙迎接视频（播放一次）
-                if now >= self._fx_until and self.startup.update(frame, now):
-                    sp = self.cfg.get("startup", {})
-                    dur = float(sp.get("paimon_duration", 10.0))
-                    fx_cfg = self.cfg.get("fx", {})
-                    if (self.fx is not None and fx_cfg.get("enabled", True)
-                            and fx_cfg.get("paimon_frames")):
-                        try:
-                            self.fx.start_paimon(dur)
-                            self._fx_until = time.monotonic() + dur + 2.0
-                            self._log(f"[启动] 元素读条读满！派蒙迎接视频播放（{dur:.1f}s，一次）")
-                        except Exception as e:
-                            self._log(f"[启动] 派蒙视频启动失败: {e}")
-                    else:
-                        self._log("[启动] 元素读条读满（派蒙帧未加载，跳过视频）")
+                                self.fx.start_paimon(dur)
+                                self._fx_until = time.monotonic() + dur + 2.0
+                                self._log(f"[启动] 元素读条读满！派蒙迎接视频播放（{dur:.1f}s，一次）")
+                            except Exception as e:
+                                self._log(f"[启动] 派蒙视频启动失败: {e}")
+                        else:
+                            self._log("[启动] 元素读条读满（派蒙帧未加载，跳过视频）")
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:
