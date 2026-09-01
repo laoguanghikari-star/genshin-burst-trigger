@@ -729,12 +729,13 @@ class BurstTrigger:
                             if shop_player is not None and not shop_player.is_playing():
                                 shop_player.play(loops=-1)
                                 self._log("[商城] 检测到创世结晶购买页！《朋友的酒》开始循环播放")
-                            # 许家空/许家萤立绘同步显示
+                            # 许家空/许家萤立绘同步显示。
+                            # 注意：不延长 _fx_until——否则商城监控自己会被门卡住，
+                            # 离开商城后永远检测不到「leave」，特效无法停止。
                             fx_cfg = self.cfg.get("fx", {})
                             if self.fx is not None and fx_cfg.get("enabled", True):
                                 try:
                                     self.fx.start_shop(600.0)
-                                    self._fx_until = time.monotonic() + 600.0 + 2.0
                                     self._log("[商城] 许家空/许家萤立绘登场（离开商城自动退场）")
                                 except Exception as e:
                                     self._log(f"[商城] 立绘特效启动失败: {e}")
