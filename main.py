@@ -136,6 +136,11 @@ class BurstRecognizer:
                   只有当负匹配超过正匹配时才扣分（条件扣分），防止其他角色误触发
       reference 支持多张参考图（列表）：分别评分取最大，覆盖爆发演示的不同阶段；
       negative_roi 可单独指定负样本裁剪区域（默认与 template_roi 相同）
+
+      baseline 场景自适应：传入 (ice0, corr0列表)（Q 按下瞬间的画面统计）时，
+      ice/hist 改为相对增量 max(0, 当前-基准)。大范围蓝色场景（海边/天云峠等）
+      会天然抬高绝对 ice/hist，导致玛薇卡爆发误触发奥黛塔；增量形式只保留
+      「爆发带来的突变」，场景底色不再贡献分数。
     """
 
     def __init__(self, cfg: dict):
@@ -234,9 +239,11 @@ class BurstRecognizer:
         small = cv2.resize(frame, (frame.shape[1] // 4, frame.shape[0] // 4))
         return small, cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
-    def check(self, frame, shared=None) -> float:
+    def check(self, frame, shared=None, baseline=None) -> float:
         """组合评分 0-1；未就绪返回 0。多参考图取最大得分。
-        shared: _prepare 的输出，同一帧多个识别器共享。"""
+        shared: _prepare 的输出，同一帧多个识别器共享。
+        baseline: (ice0, corr0列表) —— Q 按下瞬间的画面统计；给出后 ice/hist
+        改为相对增量（max(0, 当前-基准)），消除大范围蓝色场景对绝对值的抬高。"""
         if not self._refs:
             return 0.0
         if shared is not None:
@@ -248,10 +255,16 @@ class BurstRecognizer:
         fhist = self._hist(small)
         best = 0.0
         neg_best = None  # 惰性：仅当某参考 pos>0.40 时计算一次（与参考图无关，可复用）
-        for hist, tpl in self._refs:
+        for idx, (hist, tpl) in enumerate(self._refs):
             corr = max(0.0, cv2.compareHist(hist, fhist, cv2.HISTCMP_CORREL))
             pos = self._match(gi, tpl)
-            s = 0.25 * ice + 0.20 * corr + 0.55 * pos
+            if baseline is not None:
+                ice0, corr0 = baseline
+                ice_t = max(0.0, ice - ice0)
+                corr_t = max(0.0, corr - (corr0[idx] if idx < len(corr0) else 0.0))
+            else:
+                ice_t, corr_t = ice, corr
+            s = 0.25 * ice_t + 0.20 * corr_t + 0.55 * pos
             # 条件扣分：仅在负样本匹配度超过正样本时扣分（省算力 + 精准压制）
             if self.neg_ready and pos > 0.40:
                 if neg_best is None:
@@ -347,6 +360,7 @@ class BurstTrigger:
         self._q_pressed_at: float | None = None
         self._q_pending_at: float | None = None
         self._lum_at_q: float | None = None
+        self._baseline: tuple | None = None  # Q 瞬间场景基准 (ice0, corr0列表)
         self._last_trigger_at = 0.0
         self._last_q_at = 0.0
 
@@ -498,6 +512,20 @@ class BurstTrigger:
                             self._lum_at_q = self._luminance(f)
                             self._recog_hits = 0
                             self._mav_hits = 0
+                            # 场景基准：Q 瞬间全帧的冰蓝占比 + 各参考图直方图相关度。
+                            # 识别器据此把 ice/hist 转为相对增量——大范围蓝色场景
+                            # （海边/天云峠）天然抬高绝对值导致玛薇卡误触奥黛塔，
+                            # 增量形式只保留爆发带来的突变，场景底色不再计分。
+                            self._baseline = None
+                            if self.recognizer is not None:
+                                try:
+                                    s0, _ = self.recognizer._prepare(frame)
+                                    fhist0 = self.recognizer._hist(s0)
+                                    corr0 = [max(0.0, cv2.compareHist(h, fhist0, cv2.HISTCMP_CORREL))
+                                             for h, _ in self.recognizer._refs]
+                                    self._baseline = (self.recognizer._ice(s0), corr0)
+                                except Exception:
+                                    self._baseline = None
                             if self.debug:
                                 self._log(f"[武装] 等待爆发确认（{self.det_mode}，窗口 {self.window_sec:.1f}s）")
                         else:
@@ -528,7 +556,7 @@ class BurstTrigger:
                     if self.det_mode in ("recognition", "both") and not fired:
                         if shared is None:
                             shared = self.recognizer._prepare(frame)
-                        score = self.recognizer.check(frame, shared)
+                        score = self.recognizer.check(frame, shared, baseline=self._baseline)
                         self.last_score = score
                         if score >= self.recognizer.threshold:
                             self._recog_hits += 1
