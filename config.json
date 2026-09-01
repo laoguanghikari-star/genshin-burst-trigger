@@ -80,7 +80,7 @@
     }
   },
   "voice": {
-    "enabled": false,
+    "enabled": true,
     "model_path": "models/vosk-model-small-cn-0.22",
     "device": null,
     "game_path": "C:/Program Files/miHoYo Launcher/games/Genshin Impact Game/YuanShen.exe",

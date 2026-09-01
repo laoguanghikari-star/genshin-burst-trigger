@@ -198,6 +198,7 @@ class App(tk.Tk):
         self.btn_stop.config(state="disabled")
         theme.round_button(self, "测试通关", self._test_victory, kind="normal").place(x=488, y=582)
         theme.round_button(self, "测试玛薇卡", self._test_mavuika, kind="normal").place(x=604, y=582)
+        theme.round_button(self, "测试派蒙", self._test_paimon, kind="normal").place(x=720, y=582)
 
         # -- 状态行 --
         self.status_dot = tk.Label(self, text="●", bg=lab, fg=theme.ERR, bd=0, highlightthickness=0,
@@ -367,6 +368,24 @@ class App(tk.Tk):
                 self.log("[玛薇卡] BGM 播放中，火焰爆炸播放一次")
             except Exception as e:
                 self.log(f"[玛薇卡] 测试失败: {e}")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _test_paimon(self):
+        """测试派蒙迎接视频（绿幕抠像素材，全屏播放一次）。"""
+        self.log("[启动] 测试按钮：派蒙迎接视频")
+
+        def work():
+            try:
+                if not self.fx.is_alive():
+                    self.fx.warmup()
+                    time.sleep(2.5)
+                dur = float(self.cfg.get("startup", {}).get("paimon_duration", 7.1))
+                if self.cfg.get("fx", {}).get("enabled", True):
+                    self.fx.start_paimon(dur)
+                    self.log(f"[启动] 派蒙迎接视频播放（{dur:.1f}s，一次）")
+            except Exception as e:
+                self.log(f"[启动] 测试失败: {e}")
 
         threading.Thread(target=work, daemon=True).start()
 
