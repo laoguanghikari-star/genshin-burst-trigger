@@ -58,8 +58,8 @@ class BgmPlayer:
         self.sound.set_volume(volume)
         self.channel = None
 
-    def play(self) -> None:
-        self.channel = self.sound.play()
+    def play(self, loops: int = 0) -> None:
+        self.channel = self.sound.play(loops=loops)
 
     def is_playing(self) -> bool:
         return bool(self.channel is not None and self.channel.get_busy())
@@ -328,6 +328,64 @@ class CompletionMonitor:
         return False
 
 
+# ---------------------------------------------------------------- shop
+class ShopMonitor:
+    """商城「购买创世结晶」界面持续监控：进入 → 循环 BGM，离开 → 停止。
+
+    与通关监控不同：需要边沿事件分别驱动 BGM 的启动与淡出停止。
+    update() 返回 (进入边沿, 离开边沿)；离开需连续 stop_misses 次未命中
+    （容忍界面短暂遮挡/加载），避免误停。"""
+
+    def __init__(self, cfg: dict):
+        s = cfg.get("shop", {})
+        self.enabled = bool(s.get("enabled", False))
+        self.check_interval = float(s.get("check_interval", 0.5))
+        self.stop_misses = int(s.get("stop_misses", 6))
+        self.recognizer = None
+        if self.enabled:
+            det = {
+                "mode": "recognition",
+                "reference": s.get("reference", "assets/shop_ref.png"),
+                "template_roi": s.get("template_roi", [480, 240, 1570, 970]),
+                "negative_roi": s.get("negative_roi"),
+                "negative_templates": s.get("negative_templates", []),
+                "neg_penalty": float(s.get("neg_penalty", 1.0)),
+                "match_threshold": float(s.get("match_threshold", 0.5)),
+                "match_frames": int(s.get("match_frames", 2)),
+                "window_seconds": 1.0,
+            }
+            self.recognizer = BurstRecognizer({"detection": det})
+            self.threshold = det["match_threshold"]
+            self.match_frames = det["match_frames"]
+        self._hits = 0
+        self._active = False
+        self._misses = 0
+        self._last_check = 0.0
+
+    def update(self, frame, now: float) -> tuple[bool, bool]:
+        """每帧调用（内部按 check_interval 节流）。返回 (进入边沿, 离开边沿)。"""
+        if self.recognizer is None:
+            return False, False
+        if now - self._last_check < self.check_interval:
+            return False, False
+        self._last_check = now
+        score = self.recognizer.check(frame)
+        if score >= self.threshold:
+            self._hits += 1
+            self._misses = 0
+            if self._hits >= self.match_frames and not self._active:
+                self._active = True
+                return True, False
+        else:
+            self._hits = 0
+            if self._active:
+                self._misses += 1
+                if self._misses >= self.stop_misses:
+                    self._active = False
+                    return False, True
+        return False, False
+
+
 # ---------------------------------------------------------------- detector
 class BurstTrigger:
     def __init__(self, cfg: dict, stop_event=None, log=None, fx=None):
@@ -351,6 +409,7 @@ class BurstTrigger:
         self.recognizer = BurstRecognizer(cfg) if self.det_mode in ("recognition", "both") else None
         self._recog_hits = 0
         self.completion = CompletionMonitor(cfg)
+        self.shop = ShopMonitor(cfg)
         self._fx_until = 0.0  # 特效结束时间戳：期间暂停通关检测（避免灯光干扰）
 
         import threading
@@ -437,6 +496,7 @@ class BurstTrigger:
         victory_bgm = None
         mavuika_player = None
         columbina_player = None
+        shop_player = None
         try:
             camera.start(target_fps=fps, video_mode=True)
 
@@ -495,6 +555,20 @@ class BurstTrigger:
                         self._log(f"[哥伦比娅] BGM 文件不存在（仅识别不播音乐）: {audio}")
                 except Exception as e:
                     self._log(f"[哥伦比娅] BGM 加载失败: {e}")
+            # 商城 BGM（进入创世结晶购买页循环播放，离开淡出停止）
+            if self.shop.enabled and self.shop.recognizer is not None:
+                try:
+                    sp = self.cfg.get("shop", {})
+                    audio = Path(sp.get("audio_file", "assets/shop_bgm.mp3"))
+                    if not audio.is_absolute():
+                        audio = BASE / audio
+                    if audio.exists():
+                        shop_player = BgmPlayer(audio, sp.get("volume", self.cfg.get("volume", 0.9)))
+                        self._log("[商城] 创世结晶购买页 BGM 就绪（进入播放/离开淡出）")
+                    else:
+                        self._log(f"[商城] BGM 文件不存在（仅识别不播音乐）: {audio}")
+                except Exception as e:
+                    self._log(f"[商城] BGM 加载失败: {e}")
 
             listener = keyboard.Listener(on_press=self._on_press)
             listener.start()
@@ -524,6 +598,22 @@ class BurstTrigger:
                 if now >= self._fx_until and self.completion.update(frame, now):
                     self._log("[通关] 幽境危战通关！胜利特效启动 🎉")
                     self._start_victory(victory_sound, victory_bgm)
+
+                # 商城创世结晶购买页监控（持续，独立于 Q；特效播放期间暂停）
+                if now >= self._fx_until:
+                    enter, leave = self.shop.update(frame, now)
+                    if enter:
+                        if shop_player is not None and not shop_player.is_playing():
+                            shop_player.play(loops=-1)
+                            self._log("[商城] 检测到创世结晶购买页！《朋友的酒》开始循环播放")
+                    elif leave:
+                        if shop_player is not None and shop_player.is_playing():
+                            try:
+                                fade = float(self.cfg.get("shop", {}).get("fade_seconds", 1.5))
+                                shop_player.channel.fadeout(int(fade * 1000))
+                            except Exception:
+                                pass
+                            self._log("[商城] 已离开购买页，BGM 淡出停止")
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:

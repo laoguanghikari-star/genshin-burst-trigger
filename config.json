@@ -195,5 +195,34 @@
     "window_seconds": 2.5,
     "audio_file": "assets/columbina_bgm.wav",
     "fx_duration": 4.0
+  },
+  "shop": {
+    "enabled": true,
+    "reference": "assets/shop_ref.png",
+    "template_roi": [
+      480,
+      240,
+      1570,
+      970
+    ],
+    "negative_roi": [
+      480,
+      240,
+      1570,
+      970
+    ],
+    "negative_templates": [
+      "assets/shop_neg01.png",
+      "assets/shop_neg02.png",
+      "assets/shop_neg03.png",
+      "assets/shop_neg04.png"
+    ],
+    "neg_penalty": 1.0,
+    "match_threshold": 0.5,
+    "match_frames": 2,
+    "check_interval": 0.5,
+    "stop_misses": 6,
+    "audio_file": "assets/shop_bgm.mp3",
+    "fade_seconds": 1.5
   }
 }
