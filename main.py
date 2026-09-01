@@ -380,6 +380,22 @@ class BurstTrigger:
             except Exception as e:
                 self._log(f"[玛薇卡] 识别加载失败: {e}")
 
+        # 哥伦比娅独立识别器（可选；config 的 columbina 段启用）
+        self.columbina_rec: BurstRecognizer | None = None
+        self._col_hits = 0
+        self.last_columbina_score = 0.0
+        col_cfg = cfg.get("columbina", {})
+        if col_cfg.get("enabled", False) and self.det_mode in ("recognition", "both"):
+            try:
+                cr = BurstRecognizer({"detection": col_cfg})
+                if cr.ready:
+                    self.columbina_rec = cr
+                    self._log(f"[哥伦比娅] 爆发识别已加载（{len(cr._refs)} 张参考图，{len(cr._neg_tpls)} 个负样本）")
+                else:
+                    self._log("[哥伦比娅] 参考图缺失，识别未启用")
+            except Exception as e:
+                self._log(f"[哥伦比娅] 识别加载失败: {e}")
+
         # GUI 轮询用（只读状态）
         self.last_lum: float | None = None
         self.last_slot: int | None = None
@@ -420,6 +436,7 @@ class BurstTrigger:
         victory_sound = None
         victory_bgm = None
         mavuika_player = None
+        columbina_player = None
         try:
             camera.start(target_fps=fps, video_mode=True)
 
@@ -450,7 +467,7 @@ class BurstTrigger:
                         self._log(f"[通关] BGM 文件不存在（跳过）: {bgm_path}")
                 except Exception as e:
                     self._log(f"[通关] BGM 加载失败（跳过）: {e}")
-            # 玛薇卡专属 BGM（元素爆发触发播放；特效待定）
+            # 玛薇卡专属 BGM（元素爆发触发播放；特效为火焰爆炸）
             if self.mavuika_rec is not None:
                 try:
                     mav_cfg = self.cfg.get("mavuika", {})
@@ -458,12 +475,26 @@ class BurstTrigger:
                     if not audio.is_absolute():
                         audio = BASE / audio
                     if audio.exists():
-                        mavuika_player = BgmPlayer(audio, self.cfg.get("volume", 0.9))
+                        mavuika_player = BgmPlayer(audio, mav_cfg.get("volume", self.cfg.get("volume", 0.9)))
                         self._log("[玛薇卡] 专属 BGM 就绪")
                     else:
                         self._log(f"[玛薇卡] BGM 文件不存在（仅识别不播音乐）: {audio}")
                 except Exception as e:
                     self._log(f"[玛薇卡] BGM 加载失败: {e}")
+            # 哥伦比娅专属 BGM（元素爆发触发播放；特效待定）
+            if self.columbina_rec is not None:
+                try:
+                    col_cfg = self.cfg.get("columbina", {})
+                    audio = Path(col_cfg.get("audio_file", "assets/columbina_bgm.wav"))
+                    if not audio.is_absolute():
+                        audio = BASE / audio
+                    if audio.exists():
+                        columbina_player = BgmPlayer(audio, col_cfg.get("volume", self.cfg.get("volume", 0.9)))
+                        self._log("[哥伦比娅] 专属 BGM 就绪")
+                    else:
+                        self._log(f"[哥伦比娅] BGM 文件不存在（仅识别不播音乐）: {audio}")
+                except Exception as e:
+                    self._log(f"[哥伦比娅] BGM 加载失败: {e}")
 
             listener = keyboard.Listener(on_press=self._on_press)
             listener.start()
@@ -471,9 +502,9 @@ class BurstTrigger:
             if self.recognizer is not None and not self.recognizer.ready:
                 self._log(f"[识别] 警告：参考图未加载（{self.recognizer.ref_path}），识别将始终不匹配")
 
-            self._log(f"[启动] Q + {self.det_mode}模式 | 冷却 {self.cooldown}s" +
-                      (f" | 出战槽位校验 {self.target_slot}" if self.use_slot_check else " | 无槽位校验"))
-            self._log("[提示] 只有奥黛塔的爆发演示画面会触发；播放期间不会重复触发。Ctrl+C 退出。")
+            self._log("[启动] Q + " + self.det_mode + "模式 | 冷却 " + str(self.cooldown) + "s" +
+                      (" | 出战槽位校验 " + str(self.target_slot) if self.use_slot_check else " | 无槽位校验"))
+            self._log("[提示] 奥黛塔/玛薇卡/哥伦比娅各自的爆发演示画面会触发专属效果；播放期间不会重复触发。Ctrl+C 退出。")
 
             while True:
                 if self._stop.is_set():
@@ -496,7 +527,9 @@ class BurstTrigger:
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:
-                    if player.is_playing() or (mavuika_player is not None and mavuika_player.is_playing()):
+                    if (player.is_playing()
+                            or (mavuika_player is not None and mavuika_player.is_playing())
+                            or (columbina_player is not None and columbina_player.is_playing())):
                         self._log("[跳过] BGM 播放中，不重复触发")
                     else:
                         slot_ok = True
@@ -512,6 +545,7 @@ class BurstTrigger:
                             self._lum_at_q = self._luminance(f)
                             self._recog_hits = 0
                             self._mav_hits = 0
+                            self._col_hits = 0
                             # 场景基准：Q 瞬间全帧的冰蓝占比 + 各参考图直方图相关度。
                             # 识别器据此把 ice/hist 转为相对增量——大范围蓝色场景
                             # （海边/天云峠）天然抬高绝对值导致玛薇卡误触奥黛塔，
@@ -582,22 +616,39 @@ class BurstTrigger:
                         if self._mav_hits >= self.mavuika_rec.match_frames:
                             fired = True
                             fired_kind = "mavuika"
+                    # 识别通道（哥伦比娅爆发演示，独立识别器）
+                    if self.det_mode in ("recognition", "both") and not fired and self.columbina_rec is not None:
+                        if shared is None:
+                            shared = self.columbina_rec._prepare(frame)
+                        cscore = self.columbina_rec.check(frame, shared)
+                        self.last_columbina_score = cscore
+                        if cscore >= self.columbina_rec.threshold:
+                            self._col_hits += 1
+                        else:
+                            self._col_hits = 0
+                        if self.debug:
+                            self._log(f"[哥伦比娅] score={cscore:+.3f} hits={self._col_hits}/{self.columbina_rec.match_frames}")
+                        if self._col_hits >= self.columbina_rec.match_frames:
+                            fired = True
+                            fired_kind = "columbina"
 
                     if fired:
                         if fired_kind == "mavuika":
-                            if player.is_playing() or (mavuika_player is not None and mavuika_player.is_playing()):
+                            if (player.is_playing()
+                                    or (mavuika_player is not None and mavuika_player.is_playing())
+                                    or (columbina_player is not None and columbina_player.is_playing())):
                                 self._log("[跳过] BGM 播放中，不重复触发")
                             elif now - self._last_trigger_at > self.cooldown:
                                 self._last_trigger_at = now
                                 self._log("[玛薇卡] 识别到玛薇卡元素爆发！播放专属 BGM + 火焰爆炸特效")
                                 if mavuika_player is not None:
                                     mavuika_player.play()
-                                # 火焰爆炸绿幕素材特效：前 4 秒，播放一次
+                                # 火焰爆炸绿幕素材特效：前 3 秒，播放一次
                                 fx_cfg = self.cfg.get("fx", {})
                                 if (self.fx is not None and fx_cfg.get("enabled", True)
                                         and fx_cfg.get("fire_frames")):
                                     try:
-                                        dur = float(self.cfg.get("mavuika", {}).get("fx_duration", 4.0))
+                                        dur = float(self.cfg.get("mavuika", {}).get("fx_duration", 3.0))
                                         self.fx.start_fire(dur)
                                         self._fx_until = time.monotonic() + dur + 2.0
                                         self._log(f"[特效] 玛薇卡火焰爆炸启动（{dur:.1f}s，播放一次）")
@@ -605,8 +656,23 @@ class BurstTrigger:
                                         self._log(f"[特效] 火焰爆炸启动失败: {e}")
                             else:
                                 self._log("[触发] 检测到玛薇卡爆发，但处于冷却中，忽略")
+                        elif fired_kind == "columbina":
+                            if (player.is_playing()
+                                    or (mavuika_player is not None and mavuika_player.is_playing())
+                                    or (columbina_player is not None and columbina_player.is_playing())):
+                                self._log("[跳过] BGM 播放中，不重复触发")
+                            elif now - self._last_trigger_at > self.cooldown:
+                                self._last_trigger_at = now
+                                self._log("[哥伦比娅] 识别到哥伦比娅元素爆发！播放专属 BGM")
+                                if columbina_player is not None:
+                                    columbina_player.play()
+                                # 哥伦比娅专属特效待定（用户后续补充）
+                            else:
+                                self._log("[触发] 检测到哥伦比娅爆发，但处于冷却中，忽略")
                         else:
-                            if player.is_playing() or (mavuika_player is not None and mavuika_player.is_playing()):
+                            if (player.is_playing()
+                                    or (mavuika_player is not None and mavuika_player.is_playing())
+                                    or (columbina_player is not None and columbina_player.is_playing())):
                                 self._log(f"[跳过] BGM 播放中，不重复触发")
                             elif now - self._last_trigger_at > self.cooldown:
                                 self._last_trigger_at = now
@@ -619,6 +685,7 @@ class BurstTrigger:
                         self._lum_at_q = None
                         self._recog_hits = 0
                         self._mav_hits = 0
+                        self._col_hits = 0
                     elif now - self._q_pending_at > self.window_sec:
                         if self.debug:
                             self._log("[放弃] 窗口期结束，未确认爆发（能量不满？）")
@@ -626,6 +693,7 @@ class BurstTrigger:
                         self._lum_at_q = None
                         self._recog_hits = 0
                         self._mav_hits = 0
+                        self._col_hits = 0
         except KeyboardInterrupt:
             pass
         finally:
