@@ -483,8 +483,8 @@ class LaserApp:
             try:
                 from PIL import Image as PILImage
                 im = PILImage.open(p).convert("RGBA")
-                th = 150  # 360p 的 ~42% 高
-                tw = max(1, int(im.width * th / im.height))
+                # 两张立绘统一尺寸（与许家空对齐：宽 129 x 高 150）
+                tw, th = 129, 150
                 im = im.resize((tw, th), PILImage.LANCZOS)
                 arr = np.array(im)
                 setattr(self, attr, arr[..., [2, 1, 0, 3]])  # RGBA→BGRA

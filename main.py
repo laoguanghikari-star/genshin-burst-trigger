@@ -335,27 +335,35 @@ class CompletionMonitor:
 
 # ---------------------------------------------------------------- shop
 class ShopMonitor:
-    """商城「购买创世结晶」界面持续监控：进入 → 循环 BGM，离开 → 停止。
+    """商城「购买创世结晶」界面持续监控：进入 → 立绘+BGM，离开 → 淡出停止。
 
-    与通关监控不同：需要边沿事件分别驱动 BGM 的启动与淡出停止。
-    update() 返回 (进入边沿, 离开边沿)；离开需连续 stop_misses 次未命中
-    （容忍界面短暂遮挡/加载），避免误停。"""
+    识别采用三重信号（跟随用户建议：左栏「凝取结晶」字样及颜色）——
+    侧栏 UI 是不透明的，不会随半透明面板后的环境变化：
+      1) 左栏「凝取结晶」行高亮：亮度 ≥ highlight_min（选中态的亮色高亮）
+      2) 行上方侧栏背景为深色 UI：亮度 ≤ dark_max（区别于白色/浅色界面）
+      3) 行内容模板匹配（凝取结晶字样样式，双参考图覆盖不同环境）
+    三重信号全部满足才计入命中，任一不满足即计数未命中。
+    离开商城（侧栏消失/未高亮）→ 连续 stop_misses 次未命中 → 离开边沿。"""
 
     def __init__(self, cfg: dict):
         s = cfg.get("shop", {})
         self.enabled = bool(s.get("enabled", False))
         self.check_interval = float(s.get("check_interval", 0.5))
         self.stop_misses = int(s.get("stop_misses", 6))
+        self.highlight_roi = s.get("highlight_roi", [60, 640, 300, 120])  # 凝取结晶高亮行
+        self.highlight_min = float(s.get("highlight_min", 150))
+        self.dark_roi = s.get("dark_roi", [60, 540, 300, 90])  # 行上方侧栏背景
+        self.dark_max = float(s.get("dark_max", 130))
         self.recognizer = None
         if self.enabled:
             det = {
                 "mode": "recognition",
-                "reference": s.get("reference", "assets/shop_ref.png"),
-                "template_roi": s.get("template_roi", [480, 240, 1570, 970]),
+                "reference": s.get("reference", "assets/shop_tab_ref.png"),
+                "template_roi": s.get("template_roi", [60, 640, 300, 120]),
                 "negative_roi": s.get("negative_roi"),
                 "negative_templates": s.get("negative_templates", []),
                 "neg_penalty": float(s.get("neg_penalty", 1.0)),
-                "match_threshold": float(s.get("match_threshold", 0.5)),
+                "match_threshold": float(s.get("match_threshold", 0.45)),
                 "match_frames": int(s.get("match_frames", 2)),
                 "window_seconds": 1.0,
             }
@@ -367,6 +375,12 @@ class ShopMonitor:
         self._misses = 0
         self._last_check = 0.0
 
+    @staticmethod
+    def _mean_gray(frame, roi) -> float:
+        x, y, w, h = roi
+        seg = frame[y : y + h, x : x + w]
+        return float((seg[..., 0] * 0.114 + seg[..., 1] * 0.587 + seg[..., 2] * 0.299).mean())
+
     def update(self, frame, now: float) -> tuple[bool, bool]:
         """每帧调用（内部按 check_interval 节流）。返回 (进入边沿, 离开边沿)。"""
         if self.recognizer is None:
@@ -375,7 +389,9 @@ class ShopMonitor:
             return False, False
         self._last_check = now
         score = self.recognizer.check(frame)
-        if score >= self.threshold:
+        hl = self._mean_gray(frame, self.highlight_roi)
+        dk = self._mean_gray(frame, self.dark_roi)
+        if score >= self.threshold and hl >= self.highlight_min and dk <= self.dark_max:
             self._hits += 1
             self._misses = 0
             if self._hits >= self.match_frames and not self._active:

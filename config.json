@@ -74,8 +74,8 @@
     "shop_kong": "assets/xujia_kong.png",
     "shop_ying": "assets/xujia_ying.png",
     "shop_text": [
-      "许家空和许家萤提醒您",
-      "适度游戏，理性消费"
+      "许家空/萤提醒您",
+      "适度游戏 理性消费"
     ],
     "shop_font_size": 30,
     "gif": {
@@ -210,30 +210,47 @@
   },
   "shop": {
     "enabled": true,
-    "reference": "assets/shop_ref.png",
+    "reference": [
+      "assets/shop_tab_ref.png",
+      "assets/shop_tab_ref02.png"
+    ],
     "template_roi": [
-      480,
-      240,
-      1570,
-      970
+      60,
+      640,
+      300,
+      120
     ],
     "negative_roi": [
-      480,
-      240,
-      1570,
-      970
+      60,
+      640,
+      300,
+      120
     ],
     "negative_templates": [
-      "assets/shop_neg01.png",
-      "assets/shop_neg02.png",
-      "assets/shop_neg03.png",
-      "assets/shop_neg04.png"
+      "assets/shop_tab_neg01.png",
+      "assets/shop_tab_neg02.png",
+      "assets/shop_tab_neg03.png",
+      "assets/shop_tab_neg04.png"
     ],
     "neg_penalty": 1.0,
-    "match_threshold": 0.5,
+    "match_threshold": 0.45,
     "match_frames": 2,
     "check_interval": 0.5,
     "stop_misses": 6,
+    "highlight_roi": [
+      60,
+      640,
+      300,
+      120
+    ],
+    "highlight_min": 150,
+    "dark_roi": [
+      60,
+      540,
+      300,
+      90
+    ],
+    "dark_max": 130,
     "audio_file": "assets/shop_bgm.mp3",
     "fade_seconds": 1.5
   },
