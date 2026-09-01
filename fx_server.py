@@ -529,7 +529,9 @@ class LaserApp:
             self._blit_rgba(color, alpha, self._shop_ying, RW - 24 - w, ky, k)
         if self._shop_text is not None:
             th, tw = self._shop_text.shape[:2]
-            self._blit_rgba(color, alpha, self._shop_text, (RW - tw) // 2, int(RH * 0.76), k)
+            # 中偏下，但自适应贴底：多行文字不被裁掉
+            self._blit_rgba(color, alpha, self._shop_text,
+                            (RW - tw) // 2, min(int(RH * 0.76), RH - th - 8), k)
 
     def _blit_rgba(self, color, alpha, fr, x0, y0, k):
         """把 BGRA 帧加法混合到画布（带边界裁剪）。"""
