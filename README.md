@@ -10,7 +10,7 @@
 | **玛薇卡爆发** | 玛薇卡元素爆发演示画面 | 《灼火之心》BGM（1:56-2:59）+ 火焰爆炸特效（绿幕抠像，3 秒播放一次） |
 | **哥伦比娅爆发** | 哥伦比娅元素爆发演示画面（01 帧即触发） | 《白鸽之诗》BGM（2:14-2:58，2 秒淡入 + 结尾淡出） |
 | **幽境危战通关** | 通关结算页出现 | Unbelievable! 音效 + 小人走入 + 礼花齐放 + 通关 BGM |
-| **商城氪金页** | 进入创世结晶购买页 | 《朋友的酒》循环播放（从 10 秒起），离开商城淡出停止 |
+| **商城氪金页** | 进入创世结晶购买页（凝取结晶高亮，三重信号） | 《朋友的酒》循环播放（从 10 秒起）+ 许家空/许家萤立绘 + 警示语；离开商城淡出退场 |
 | **启动读条读满** | 启动加载读条到指定进度 | 派蒙迎接视频（绿幕抠像，全屏播放一次） |
 | **语音控制** | 喊「原神 启动！」 | 启动游戏 + TTS 播报 |
 
@@ -35,12 +35,17 @@ score = 0.25×冰蓝占比 + 0.20×HSV直方图相关 + 0.55×姿态模板匹配
   - 奥黛塔 0.894 触发；玛薇卡 0.813/0.867 触发；哥伦比娅 0.71~0.85 触发（01 帧即触发）
   - 各角色互不误触（≤0.40），队伍配置页 0.117~0.402 安全
 
-## 🛒 商城 BGM（shop）
+## 🛒 商城 BGM + 立绘特效（shop）
 
-持续屏幕监控（非 Q 触发）：识别到**购买创世结晶界面**（中部结晶档位面板）→《朋友的酒》无限循环播放；离开商城（连续 6 次未识别 ≈ 3 秒）→ 1.5 秒淡出停止。
+持续屏幕监控（非 Q 触发）：识别到**购买创世结晶界面** →《朋友的酒》无限循环播放 + **许家空/许家萤立绘登场**；离开商城（连续 6 次未识别 ≈ 3 秒）→ BGM 淡出 + 立绘 2 秒退场。
 
-- 参考图 `assets/shop_ref.png`（氪金页中部面板），负样本为月卡/礼包/装扮/兑换四页同区域
-- 实测：氪金页 0.723 触发，其他商城页 0.09~0.34 安全
+- **三重信号识别**（左栏「凝取结晶」字样及颜色——侧栏 UI 不透明，不随半透明面板后的环境变化）：
+  1. 「凝取结晶」高亮行亮度 ≥ 150（选中态高亮色）
+  2. 行上方侧栏为深色 UI 背景（≤ 130，区别白色/浅色界面）
+  3. 行内容模板匹配（双参考图覆盖不同环境，阈值 0.45）
+- **立绘特效**：许家空（左中偏下）+ 许家萤（右中偏下，同尺寸 129×150）+ 中央警示语（黑体红字黑描边，可配置行数/字号，自适应贴底排版）
+- 文案示例：`原初之光虽好 / 可不要做空你自己的世界哦`（`fx.shop_text` 随时可改）
+- 实测：氪金页（含不同环境）触发，月卡/礼包/装扮/兑换/队伍配置/白色启动界面全部安全
 
 ## 🚀 启动派蒙迎接视频（startup）
 
@@ -75,7 +80,7 @@ score = 0.25×冰蓝占比 + 0.20×HSV直方图相关 + 0.55×姿态模板匹配
 
 - **真·半透明舞台灯光**：UpdateLayeredWindow 每像素 alpha + 加法混合（光即光，背景永远透出）
 - 3 束探照灯（红/紫/绿）+ 顶/底频谱跳动波 + 波浪旁粒子 + 雪花粒子 + 左右跳舞 GIF
-- 特效模式：灯光秀 / 胜利（小人+礼花）/ 火焰爆炸 / 派蒙视频
+- 特效模式：灯光秀 / 胜利（小人+礼花）/ 火焰爆炸 / 派蒙视频 / 商城立绘（shopfx）
 - 鼠标完全穿透（WS_EX_TRANSPARENT），不抢焦点；独立进程 `fx_server.py`，由 `fx_client.py` 命令管道控制
 - 注意：窗口不能加 WS_EX_NOACTIVATE / WS_EX_TOOLWINDOW、子窗口不能设 WS_EX_LAYERED（实测会破坏 ULW 合成）
 
@@ -120,9 +125,9 @@ python fx_server.py --demo paimon:10 # 特效演示：派蒙视频 10 秒
 | mavuika | reference / match_threshold / audio_file / volume / fx_duration | 玛薇卡参考图(2张) / 阈值 / BGM / 音量 / 火焰特效时长 | 0.5 / mavuika_bgm.wav / 0.7 / 3.0 |
 | columbina | reference / match_threshold / audio_file / fx_duration | 哥伦比娅参考图(6张) / 阈值 / BGM / 特效时长(待定) | 0.5 / columbina_bgm.wav / 4.0 |
 | completion | enabled / reference / match_threshold / sound_file / bgm_file / fx_duration / bgm_fade_delay_seconds | 通关庆祝配置 | 0.45 / unbelievable.wav / victory_bgm.wav / 14 / 0 |
-| shop | enabled / reference / match_threshold / check_interval / stop_misses / audio_file / fade_seconds | 商城氪金页监控 | 0.5 / 0.5s / 6 次 / shop_bgm.mp3 / 1.5s |
+| shop | enabled / reference / template_roi / match_threshold / highlight_roi / highlight_min / dark_roi / dark_max / check_interval / stop_misses / audio_file / fade_seconds | 商城氪金页监控（三重信号） | 0.45 / [60,640,300,120] / 150 / [60,540,300,90] / 130 / 0.5s / 6 次 / shop_bgm.mp3 / 1.5s |
 | startup | enabled / icon_roi / trigger_ratio / release_ratio / min_clusters / margin_white / check_interval / paimon_duration | 启动读条监控（触发时机） | [900,660,850,130] / 0.035 / 0.02 / 2 / 0.995 / 0.3s / 10.0 |
-| fx | enabled / intensity / fade_seconds / burst_duration / fire_frames / paimon_frames / paimon_intensity / victory_frames | 特效配置 | 0.87 / 2 / 27 / 火焰与派蒙帧序列 / 1.15 |
+| fx | enabled / intensity / fade_seconds / burst_duration / fire_frames / paimon_frames / paimon_intensity / victory_frames / shop_kong / shop_ying / shop_text / shop_font_size | 特效配置（含商城立绘与警示语文案） | 0.87 / 2 / 27 / 各帧序列 / 1.15 / xujia_kong.png / xujia_ying.png |
 | voice | enabled / model_path / game_path / tts / commands | 语音控制 | vosk 模型 / YuanShen.exe / true |
 
 ## 已知限制
