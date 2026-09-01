@@ -120,7 +120,7 @@ python fx_server.py --demo paimon:10 # 特效演示：派蒙视频 10 秒
 | 块 | 字段 | 含义 | 默认 |
 |---|---|---|---|
 | 全局 | hotkey / cooldown_seconds / capture_fps / volume | 触发键 / 冷却 / 抓帧率 / 音量 | q / 20 / 30 / 0.5 |
-| detection | reference / template_roi / match_threshold / match_frames / window_seconds | 奥黛塔参考图 / 模板区域 / 阈值 / 连续帧 / 窗口 | burst_ref.png / [768,288,1024,864] / 0.55 / 2 / 2.5 |
+| detection | reference / template_roi / match_threshold / match_frames / window_seconds | 奥黛塔参考图（爆发前期特写帧，比晚段帧更早触发）/ 模板区域 / 阈值 / 连续帧 / 窗口 | burst_ref.png / [768,288,1024,864] / 0.55 / 2 / 2.5 |
 | detection | negative_templates / neg_penalty | 负样本列表 / 扣分强度 | 七七/桑多涅/玛薇卡/茜特菈莉/哥伦比娅/队伍配置页 / 1.0 |
 | mavuika | reference / match_threshold / audio_file / volume / fx_duration | 玛薇卡参考图(2张) / 阈值 / BGM / 音量 / 火焰特效时长 | 0.5 / mavuika_bgm.wav / 0.7 / 3.0 |
 | columbina | reference / match_threshold / audio_file / fx_duration | 哥伦比娅参考图(6张) / 阈值 / BGM / 特效时长(待定) | 0.5 / columbina_bgm.wav / 4.0 |
