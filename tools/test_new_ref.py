@@ -32,9 +32,9 @@ def main():
     old01 = imread(pics / "奥黛塔01.png")
     new02 = imread(BASE / "assets" / "burst_ref.png")
 
-    print("\n== new ref (02 close-up) ==")
-    run("  self 02 (expect ~1.0)", rec, new02)
-    run("  old  01 (late-stage)", rec, old01)
+    print("\n== current config refs (face early + late) ==")
+    run("  live burst close-up frame (Odette 02)", rec, new02)
+    run("  late-stage frame (Odette 01)", rec, old01)
 
     print("\n== cross-character false-positive check (expect < 0.55) ==")
     others = {

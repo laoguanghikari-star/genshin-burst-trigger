@@ -15,7 +15,7 @@
   "detection": {
     "mode": "recognition",
     "reference": [
-      "assets/burst_ref.png",
+      "assets/burst_ref_face.png",
       "assets/burst_ref_late.png"
     ],
     "template_roi": [
@@ -154,7 +154,6 @@
       "assets/neg_sandrone.png",
       "assets/neg_sandrone2.png",
       "assets/neg_citlali01.png",
-      "assets/burst_ref.png",
       "assets/burst_ref_late.png",
       "assets/columbina_ref01.png",
       "assets/columbina_ref02.png",
@@ -202,7 +201,6 @@
       "assets/neg_mavuika01.png",
       "assets/neg_mavuika02.png",
       "assets/neg_citlali01.png",
-      "assets/burst_ref.png",
       "assets/burst_ref_late.png",
       "assets/neg_party_setup01.png"
     ],
