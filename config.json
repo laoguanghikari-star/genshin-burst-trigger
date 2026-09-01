@@ -239,9 +239,9 @@
       130
     ],
     "white_ratio": 0.9,
-    "trigger_ratio": 0.1,
-    "release_ratio": 0.06,
-    "min_clusters": 5,
+    "trigger_ratio": 0.035,
+    "release_ratio": 0.02,
+    "min_clusters": 2,
     "margin_white": 0.995,
     "match_frames": 2,
     "check_interval": 0.3,
