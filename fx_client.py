@@ -65,6 +65,11 @@ class FxClient:
         if self._ensure():
             self._send(f"fire {max(0.5, float(duration))}")
 
+    def start_paimon(self, duration: float = 10.0):
+        """派蒙迎接视频：绿幕抠像帧序列，全屏播放一次。"""
+        if self._ensure():
+            self._send(f"paimon {max(0.5, float(duration))}")
+
     def warmup(self):
         """预启动特效进程（消除首次触发的冷启动延迟：Python/Tk 启动 + GIF 预解码）。"""
         self._ensure()

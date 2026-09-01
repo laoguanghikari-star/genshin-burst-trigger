@@ -386,6 +386,63 @@ class ShopMonitor:
         return False, False
 
 
+# ---------------------------------------------------------------- startup
+class StartupMonitor:
+    """启动加载屏「元素读条读满」监控 → 触发派蒙迎接视频。
+
+    加载屏特征（实测 2560x1440）：
+      - 整屏近乎纯白（>90% 像素亮度 >240）
+      - 中央元素图标带（灰色）随加载进度由细变满：
+        未满约 2.5% 深色覆盖（启动界面02），读满约 15.6%（启动界面01）
+    双重条件判定：整体纯白 + 图标带深色覆盖 ≥ trigger_ratio（连续 match_frames 次）
+    读满后触发一次；cooldown 防止同一次启动重复触发。"""
+
+    def __init__(self, cfg: dict):
+        s = cfg.get("startup", {})
+        self.enabled = bool(s.get("enabled", False))
+        self.check_interval = float(s.get("check_interval", 0.5))
+        self.icon_roi = s.get("icon_roi", [900, 660, 850, 130])  # x, y, w, h
+        self.white_ratio = float(s.get("white_ratio", 0.9))
+        self.trigger_ratio = float(s.get("trigger_ratio", 0.11))
+        self.release_ratio = float(s.get("release_ratio", 0.06))
+        self.match_frames = int(s.get("match_frames", 2))
+        self.cooldown = float(s.get("cooldown_seconds", 60.0))
+        self._hits = 0
+        self._active = False
+        self._last_check = 0.0
+        self._last_trigger_at = -1e9
+
+    def _band_coverage(self, frame) -> float:
+        """图标带内深色像素占比（0-1）。"""
+        x, y, w, h = self.icon_roi
+        band = frame[y : y + h, x : x + w]
+        gray = band[..., 0] * 0.114 + band[..., 1] * 0.587 + band[..., 2] * 0.299
+        return float((gray < 200).mean())
+
+    def update(self, frame, now: float) -> bool:
+        """每帧调用（内部节流）。返回 True = 读满边沿触发。"""
+        if not self.enabled:
+            return False
+        if now - self._last_check < self.check_interval:
+            return False
+        self._last_check = now
+        gray = frame[..., 0] * 0.114 + frame[..., 1] * 0.587 + frame[..., 2] * 0.299
+        white = float((gray > 240).mean())
+        cov = self._band_coverage(frame)
+        if white >= self.white_ratio and cov >= self.trigger_ratio:
+            self._hits += 1
+            if (self._hits >= self.match_frames and not self._active
+                    and now - self._last_trigger_at > self.cooldown):
+                self._active = True
+                self._last_trigger_at = now
+                return True
+        else:
+            self._hits = 0
+            if cov < self.release_ratio:
+                self._active = False
+        return False
+
+
 # ---------------------------------------------------------------- detector
 class BurstTrigger:
     def __init__(self, cfg: dict, stop_event=None, log=None, fx=None):
@@ -410,6 +467,7 @@ class BurstTrigger:
         self._recog_hits = 0
         self.completion = CompletionMonitor(cfg)
         self.shop = ShopMonitor(cfg)
+        self.startup = StartupMonitor(cfg)
         self._fx_until = 0.0  # 特效结束时间戳：期间暂停通关检测（避免灯光干扰）
 
         import threading
@@ -615,6 +673,22 @@ class BurstTrigger:
                             except Exception:
                                 pass
                             self._log("[商城] 已离开购买页，BGM 淡出停止")
+
+                # 启动加载屏「元素读条读满」监控 → 派蒙迎接视频（播放一次）
+                if now >= self._fx_until and self.startup.update(frame, now):
+                    sp = self.cfg.get("startup", {})
+                    dur = float(sp.get("paimon_duration", 10.0))
+                    fx_cfg = self.cfg.get("fx", {})
+                    if (self.fx is not None and fx_cfg.get("enabled", True)
+                            and fx_cfg.get("paimon_frames")):
+                        try:
+                            self.fx.start_paimon(dur)
+                            self._fx_until = time.monotonic() + dur + 2.0
+                            self._log(f"[启动] 元素读条读满！派蒙迎接视频播放（{dur:.1f}s，一次）")
+                        except Exception as e:
+                            self._log(f"[启动] 派蒙视频启动失败: {e}")
+                    else:
+                        self._log("[启动] 元素读条读满（派蒙帧未加载，跳过视频）")
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:

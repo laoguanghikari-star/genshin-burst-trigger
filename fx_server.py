@@ -167,6 +167,10 @@ class LaserApp:
         self._fire_frames = []
         self._fire_fps = 30.0
         self._load_fire(cfg)
+        # 派蒙迎接视频（绿幕抠像帧序列，启动读满播放一次）
+        self._paimon_frames = []
+        self._paimon_fps = 24.0
+        self._load_paimon(cfg)
         # 礼花编组（发射-上升-爆炸完整过程，金红必带 + 彩池补充）
         self._fireworks = self._make_fireworks()
 
@@ -273,6 +277,15 @@ class LaserApp:
                 self.running = True
                 self.mode = "fire"
                 self._log(f"火焰爆炸特效开始（{self.duration:.1f}s，播放一次）")
+            elif cmd[0] == "paimon":
+                try:
+                    self.duration = max(0.5, float(cmd[1]))
+                except (IndexError, ValueError):
+                    self.duration = 10.0
+                self.t0 = time.monotonic()
+                self.running = True
+                self.mode = "paimon"
+                self._log(f"派蒙迎接视频开始（{self.duration:.1f}s，播放一次）")
             elif cmd[0] == "stop":
                 self.running = False
                 self._log("灯光秀停止")
@@ -403,6 +416,38 @@ class LaserApp:
         if idx >= len(self._fire_frames):
             return
         self._blit_rgba(color, alpha, self._fire_frames[idx], 0, 0, k)
+
+    # -- 派蒙迎接视频帧（绿幕抠像 BGRA，全屏播放一次） --
+    def _load_paimon(self, cfg):
+        path = cfg.get("paimon_frames", "assets/paimon_frames.npz")
+        if not Path(path).is_absolute():
+            path = str(BASE / path)
+        if not Path(path).exists():
+            return
+        try:
+            data = np.load(path)
+            arr = data["frames"]  # (N, H, W, 4) BGRA
+            frames = []
+            for fr in arr:
+                if fr.shape[0] != RH:
+                    sc = RH / fr.shape[0]
+                    nw = max(1, int(fr.shape[1] * sc))
+                    fr = cv2.resize(fr, (nw, RH), interpolation=cv2.INTER_AREA)
+                frames.append(fr)
+            self._paimon_frames = frames
+            self._paimon_fps = float(cfg.get("paimon_fps", 24.0))
+            self._log(f"派蒙帧已加载: {len(frames)} 帧（{frames[0].shape[1]}x{RH}，{self._paimon_fps:.0f}fps）")
+        except Exception as e:
+            self._log(f"派蒙帧加载失败: {e}")
+
+    def _draw_paimon(self, color, alpha, elapsed, k):
+        """派蒙迎接：抠像帧序列全屏加法混合，播完即止。"""
+        if not self._paimon_frames:
+            return
+        idx = int(elapsed * self._paimon_fps)
+        if idx >= len(self._paimon_frames):
+            return
+        self._blit_rgba(color, alpha, self._paimon_frames[idx], 0, 0, k)
 
     def _blit_rgba(self, color, alpha, fr, x0, y0, k):
         """把 BGRA 帧加法混合到画布（带边界裁剪）。"""
@@ -600,6 +645,9 @@ class LaserApp:
         if self.mode == "fire":
             self._draw_fire(color, alpha, elapsed, k)
             return
+        if self.mode == "paimon":
+            self._draw_paimon(color, alpha, elapsed, k)
+            return
         tp = elapsed  # 用总时长（连续），GIF 按自身 26 秒周期完整循环，特效不跳变
         # 探照灯固定 3 束（摆动速度/张开角做轻微呼吸变化，不改变光束数量）
         swing = 0.09 + 0.02 * math.sin(tp * 0.4)
@@ -732,7 +780,7 @@ def main():
             secs = float(d) if d else 4.0
         except ValueError:
             secs = 4.0
-        app.cmd_queue.append(f"{mode} {secs}" if mode == "fire" else f"start {secs}")
+        app.cmd_queue.append(f"{mode} {secs}" if mode in ("fire", "paimon") else f"start {secs}")
         deadline = time.monotonic() + secs + 3.0
     else:
         deadline = None
