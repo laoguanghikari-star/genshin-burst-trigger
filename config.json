@@ -245,6 +245,6 @@
     "match_frames": 2,
     "check_interval": 0.3,
     "cooldown_seconds": 60,
-    "paimon_duration": 7.1
+    "paimon_duration": 10.0
   }
 }
