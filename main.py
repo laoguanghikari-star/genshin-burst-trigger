@@ -419,7 +419,8 @@ class BurstTrigger:
         self._q_pressed_at: float | None = None
         self._q_pending_at: float | None = None
         self._lum_at_q: float | None = None
-        self._baseline: tuple | None = None  # Q 瞬间场景基准 (ice0, corr0列表)
+        self._baseline: tuple | None = None  # Q 瞬间场景基准 (ice0, corr0列表) — 奥黛塔
+        self._baseline_col: tuple | None = None  # 同上 — 哥伦比娅
         self._last_trigger_at = 0.0
         self._last_q_at = 0.0
 
@@ -638,9 +639,10 @@ class BurstTrigger:
                             self._col_hits = 0
                             # 场景基准：Q 瞬间全帧的冰蓝占比 + 各参考图直方图相关度。
                             # 识别器据此把 ice/hist 转为相对增量——大范围蓝色场景
-                            # （海边/天云峠）天然抬高绝对值导致玛薇卡误触奥黛塔，
-                            # 增量形式只保留爆发带来的突变，场景底色不再计分。
+                            # （海边/天云峠）或蓝色 UI（队伍配置页）天然抬高绝对值
+                            # 导致误触发，增量形式只保留爆发带来的突变，底色不再计分。
                             self._baseline = None
+                            self._baseline_col = None
                             if self.recognizer is not None:
                                 try:
                                     s0, _ = self.recognizer._prepare(frame)
@@ -650,6 +652,15 @@ class BurstTrigger:
                                     self._baseline = (self.recognizer._ice(s0), corr0)
                                 except Exception:
                                     self._baseline = None
+                            if self.columbina_rec is not None:
+                                try:
+                                    s0, _ = self.columbina_rec._prepare(frame)
+                                    fhist0 = self.columbina_rec._hist(s0)
+                                    corr0c = [max(0.0, cv2.compareHist(h, fhist0, cv2.HISTCMP_CORREL))
+                                              for h, _ in self.columbina_rec._refs]
+                                    self._baseline_col = (self.columbina_rec._ice(s0), corr0c)
+                                except Exception:
+                                    self._baseline_col = None
                             if self.debug:
                                 self._log(f"[武装] 等待爆发确认（{self.det_mode}，窗口 {self.window_sec:.1f}s）")
                         else:
@@ -710,7 +721,7 @@ class BurstTrigger:
                     if self.det_mode in ("recognition", "both") and not fired and self.columbina_rec is not None:
                         if shared is None:
                             shared = self.columbina_rec._prepare(frame)
-                        cscore = self.columbina_rec.check(frame, shared)
+                        cscore = self.columbina_rec.check(frame, shared, baseline=self._baseline_col)
                         self.last_columbina_score = cscore
                         if cscore >= self.columbina_rec.threshold:
                             self._col_hits += 1

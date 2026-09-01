@@ -34,7 +34,8 @@
       "assets/columbina_ref03.png",
       "assets/columbina_ref04.png",
       "assets/columbina_ref05.png",
-      "assets/columbina_ref06.png"
+      "assets/columbina_ref06.png",
+      "assets/neg_party_setup01.png"
     ],
     "neg_penalty": 1.0,
     "match_threshold": 0.55,
@@ -78,7 +79,7 @@
     }
   },
   "voice": {
-    "enabled": true,
+    "enabled": false,
     "model_path": "models/vosk-model-small-cn-0.22",
     "device": null,
     "game_path": "C:/Program Files/miHoYo Launcher/games/Genshin Impact Game/YuanShen.exe",
@@ -147,7 +148,8 @@
       "assets/columbina_ref03.png",
       "assets/columbina_ref04.png",
       "assets/columbina_ref05.png",
-      "assets/columbina_ref06.png"
+      "assets/columbina_ref06.png",
+      "assets/neg_party_setup01.png"
     ],
     "neg_penalty": 1.0,
     "match_threshold": 0.5,
@@ -187,7 +189,8 @@
       "assets/neg_mavuika01.png",
       "assets/neg_mavuika02.png",
       "assets/neg_citlali01.png",
-      "assets/burst_ref.png"
+      "assets/burst_ref.png",
+      "assets/neg_party_setup01.png"
     ],
     "neg_penalty": 1.0,
     "match_threshold": 0.5,
