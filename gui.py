@@ -197,6 +197,7 @@ class App(tk.Tk):
         self.btn_stop.place(x=372, y=582)
         self.btn_stop.config(state="disabled")
         theme.round_button(self, "测试通关", self._test_victory, kind="normal").place(x=488, y=582)
+        theme.round_button(self, "测试玛薇卡", self._test_mavuika, kind="normal").place(x=604, y=582)
 
         # -- 状态行 --
         self.status_dot = tk.Label(self, text="●", bg=lab, fg=theme.ERR, bd=0, highlightthickness=0,
@@ -342,6 +343,30 @@ class App(tk.Tk):
                     self.log("[通关] BGM 与特效同时淡出")
             except Exception as e:
                 self.log(f"[通关] 测试失败: {e}")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _test_mavuika(self):
+        """测试玛薇卡：专属 BGM + 火焰爆炸特效（绿幕素材，播放一次）。"""
+        self.log("[玛薇卡] 测试按钮：专属 BGM + 火焰爆炸特效")
+
+        def work():
+            try:
+                if not self.fx.is_alive():
+                    self.fx.warmup()
+                    time.sleep(2.5)
+                mav = self.cfg.get("mavuika", {})
+                bgm = Path(mav.get("audio_file", "assets/mavuika_bgm.wav"))
+                if not bgm.is_absolute():
+                    bgm = BASE / bgm
+                from main import BgmPlayer
+                player = BgmPlayer(bgm, self.cfg.get("volume", 0.9))
+                player.play()
+                if self.cfg.get("fx", {}).get("enabled", True):
+                    self.fx.start_fire(float(mav.get("fx_duration", 4.0)))
+                self.log("[玛薇卡] BGM 播放中，火焰爆炸播放一次（4 秒）")
+            except Exception as e:
+                self.log(f"[玛薇卡] 测试失败: {e}")
 
         threading.Thread(target=work, daemon=True).start()
 

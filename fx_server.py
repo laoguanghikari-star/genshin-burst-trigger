@@ -160,9 +160,13 @@ class LaserApp:
         self._gif_fps = 20.0
         self._load_gif(cfg)
         # 胜利模式：走入小人 + 礼花
-        self.mode = "show"  # show | victory
+        self.mode = "show"  # show | victory | fire
         self._victory_frames = []
         self._load_victory(cfg)
+        # 玛薇卡火焰爆炸（绿幕抠像帧序列，触发后播放一次）
+        self._fire_frames = []
+        self._fire_fps = 30.0
+        self._load_fire(cfg)
         # 礼花编组（发射-上升-爆炸完整过程，金红必带 + 彩池补充）
         self._fireworks = self._make_fireworks()
 
@@ -260,6 +264,15 @@ class LaserApp:
                 self.running = True
                 self.mode = "victory"
                 self._log(f"胜利特效开始（{self.duration:.0f}s）")
+            elif cmd[0] == "fire":
+                try:
+                    self.duration = max(0.5, float(cmd[1]))
+                except (IndexError, ValueError):
+                    self.duration = 4.0
+                self.t0 = time.monotonic()
+                self.running = True
+                self.mode = "fire"
+                self._log(f"火焰爆炸特效开始（{self.duration:.0f}s，播放一次）")
             elif cmd[0] == "stop":
                 self.running = False
                 self._log("灯光秀停止")
@@ -358,6 +371,38 @@ class LaserApp:
             self._log(f"胜利帧已加载: {len(frames)} 帧，尺寸 {nw}x{vh}（360p）")
         except Exception as e:
             self._log(f"胜利帧加载失败: {e}")
+
+    # -- 玛薇卡火焰爆炸帧（绿幕抠像 BGRA，全屏播放一次） --
+    def _load_fire(self, cfg):
+        path = cfg.get("fire_frames", "assets/mavuika_fire_frames.npz")
+        if not Path(path).is_absolute():
+            path = str(BASE / path)
+        if not Path(path).exists():
+            return
+        try:
+            data = np.load(path)
+            arr = data["frames"]  # (N, H, W, 4) BGRA
+            frames = []
+            for fr in arr:
+                if fr.shape[0] != RH:
+                    sc = RH / fr.shape[0]
+                    nw = max(1, int(fr.shape[1] * sc))
+                    fr = cv2.resize(fr, (nw, RH), interpolation=cv2.INTER_AREA)
+                frames.append(fr)
+            self._fire_frames = frames
+            self._fire_fps = float(cfg.get("fire_fps", 30.0))
+            self._log(f"火焰帧已加载: {len(frames)} 帧（{frames[0].shape[1]}x{RH}，{self._fire_fps:.0f}fps）")
+        except Exception as e:
+            self._log(f"火焰帧加载失败: {e}")
+
+    def _draw_fire(self, color, alpha, elapsed, k):
+        """火焰爆炸：抠像帧序列全屏加法混合，播完即止。"""
+        if not self._fire_frames:
+            return
+        idx = int(elapsed * self._fire_fps)
+        if idx >= len(self._fire_frames):
+            return
+        self._blit_rgba(color, alpha, self._fire_frames[idx], 0, 0, k)
 
     def _blit_rgba(self, color, alpha, fr, x0, y0, k):
         """把 BGRA 帧加法混合到画布（带边界裁剪）。"""
@@ -552,6 +597,9 @@ class LaserApp:
         if self.mode == "victory":
             self._draw_victory(color, alpha, elapsed, k)
             return
+        if self.mode == "fire":
+            self._draw_fire(color, alpha, elapsed, k)
+            return
         tp = elapsed  # 用总时长（连续），GIF 按自身 26 秒周期完整循环，特效不跳变
         # 探照灯固定 3 束（摆动速度/张开角做轻微呼吸变化，不改变光束数量）
         swing = 0.09 + 0.02 * math.sin(tp * 0.4)
@@ -671,16 +719,21 @@ class LaserApp:
 
 def main():
     parser = argparse.ArgumentParser(description="舞台灯光特效进程 v3")
-    parser.add_argument("--demo", type=float, default=0, help="演示秒数（不读 stdin，到点自动退出）")
+    parser.add_argument("--demo", default="", help="演示（show:秒数 / fire:秒数；到点自动退出）")
     args = parser.parse_args()
 
     cfg = load_fx_cfg()
     prev_fg = user32.GetForegroundWindow()  # 创建窗口前记录前台，创建后归还焦点
     app = LaserApp(cfg, prev_fg=prev_fg)
 
-    if args.demo > 0:
-        app.cmd_queue.append(f"start {args.demo}")
-        deadline = time.monotonic() + args.demo + 3.0
+    if args.demo:
+        mode, _, d = args.demo.partition(":")
+        try:
+            secs = float(d) if d else 4.0
+        except ValueError:
+            secs = 4.0
+        app.cmd_queue.append(f"{mode} {secs}" if mode == "fire" else f"start {secs}")
+        deadline = time.monotonic() + secs + 3.0
     else:
         deadline = None
 

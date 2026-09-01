@@ -60,6 +60,11 @@ class FxClient:
         if self._ensure():
             self._send(f"victory {max(1.0, float(duration))}")
 
+    def start_fire(self, duration: float = 4.0):
+        """玛薇卡火焰爆炸：绿幕抠像帧序列，全屏播放一次。"""
+        if self._ensure():
+            self._send(f"fire {max(0.5, float(duration))}")
+
     def warmup(self):
         """预启动特效进程（消除首次触发的冷启动延迟：Python/Tk 启动 + GIF 预解码）。"""
         self._ensure()

@@ -561,10 +561,20 @@ class BurstTrigger:
                                 self._log("[跳过] BGM 播放中，不重复触发")
                             elif now - self._last_trigger_at > self.cooldown:
                                 self._last_trigger_at = now
-                                self._log("[玛薇卡] 识别到玛薇卡元素爆发！播放专属 BGM")
+                                self._log("[玛薇卡] 识别到玛薇卡元素爆发！播放专属 BGM + 火焰爆炸特效")
                                 if mavuika_player is not None:
                                     mavuika_player.play()
-                                # 玛薇卡专属灯光特效待定（用户后续补充）
+                                # 火焰爆炸绿幕素材特效：前 4 秒，播放一次
+                                fx_cfg = self.cfg.get("fx", {})
+                                if (self.fx is not None and fx_cfg.get("enabled", True)
+                                        and fx_cfg.get("fire_frames")):
+                                    try:
+                                        dur = float(self.cfg.get("mavuika", {}).get("fx_duration", 4.0))
+                                        self.fx.start_fire(dur)
+                                        self._fx_until = time.monotonic() + dur + 2.0
+                                        self._log(f"[特效] 玛薇卡火焰爆炸启动（{dur:.0f}s，播放一次）")
+                                    except Exception as e:
+                                        self._log(f"[特效] 火焰爆炸启动失败: {e}")
                             else:
                                 self._log("[触发] 检测到玛薇卡爆发，但处于冷却中，忽略")
                         else:
