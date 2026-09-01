@@ -396,18 +396,12 @@ class LaserApp:
             self._log(f"火焰帧加载失败: {e}")
 
     def _draw_fire(self, color, alpha, elapsed, k):
-        """火焰爆炸：抠像帧序列全屏加法混合，播完即止。"""
+        """火焰爆炸：抠像帧序列全屏加法混合，播完即止（素材已裁掉第二次爆炸）。"""
         if not self._fire_frames:
             return
-        n = len(self._fire_frames)
         idx = int(elapsed * self._fire_fps)
-        if idx >= n:
+        if idx >= len(self._fire_frames):
             return
-        # 结尾 0.5 秒淡出：素材 3.2s 起有第二次爆炸，淡出收尾避免硬切
-        tail = 0.5
-        t_end = n / self._fire_fps
-        if elapsed > t_end - tail:
-            k = k * max(0.0, (t_end - elapsed) / tail)
         self._blit_rgba(color, alpha, self._fire_frames[idx], 0, 0, k)
 
     def _blit_rgba(self, color, alpha, fr, x0, y0, k):

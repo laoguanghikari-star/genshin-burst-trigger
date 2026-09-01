@@ -363,8 +363,8 @@ class App(tk.Tk):
                 player = BgmPlayer(bgm, self.cfg.get("volume", 0.9))
                 player.play()
                 if self.cfg.get("fx", {}).get("enabled", True):
-                    self.fx.start_fire(float(mav.get("fx_duration", 4.0)))
-                self.log("[玛薇卡] BGM 播放中，火焰爆炸播放一次（4 秒）")
+                    self.fx.start_fire(float(mav.get("fx_duration", 3.0)))
+                self.log("[玛薇卡] BGM 播放中，火焰爆炸播放一次")
             except Exception as e:
                 self.log(f"[玛薇卡] 测试失败: {e}")
 
