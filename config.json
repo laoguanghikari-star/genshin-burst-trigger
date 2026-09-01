@@ -80,7 +80,7 @@
     }
   },
   "voice": {
-    "enabled": true,
+    "enabled": false,
     "model_path": "models/vosk-model-small-cn-0.22",
     "device": null,
     "game_path": "C:/Program Files/miHoYo Launcher/games/Genshin Impact Game/YuanShen.exe",
@@ -238,13 +238,13 @@
       130
     ],
     "white_ratio": 0.9,
-    "trigger_ratio": 0.11,
+    "trigger_ratio": 0.1,
     "release_ratio": 0.06,
     "min_clusters": 5,
     "margin_white": 0.995,
     "match_frames": 2,
-    "check_interval": 0.5,
+    "check_interval": 0.3,
     "cooldown_seconds": 60,
-    "paimon_duration": 10.0
+    "paimon_duration": 7.1
   }
 }
