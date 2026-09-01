@@ -272,7 +272,7 @@ class LaserApp:
                 self.t0 = time.monotonic()
                 self.running = True
                 self.mode = "fire"
-                self._log(f"火焰爆炸特效开始（{self.duration:.0f}s，播放一次）")
+                self._log(f"火焰爆炸特效开始（{self.duration:.1f}s，播放一次）")
             elif cmd[0] == "stop":
                 self.running = False
                 self._log("灯光秀停止")
@@ -399,9 +399,15 @@ class LaserApp:
         """火焰爆炸：抠像帧序列全屏加法混合，播完即止。"""
         if not self._fire_frames:
             return
+        n = len(self._fire_frames)
         idx = int(elapsed * self._fire_fps)
-        if idx >= len(self._fire_frames):
+        if idx >= n:
             return
+        # 结尾 0.5 秒淡出：素材 3.2s 起有第二次爆炸，淡出收尾避免硬切
+        tail = 0.5
+        t_end = n / self._fire_fps
+        if elapsed > t_end - tail:
+            k = k * max(0.0, (t_end - elapsed) / tail)
         self._blit_rgba(color, alpha, self._fire_frames[idx], 0, 0, k)
 
     def _blit_rgba(self, color, alpha, fr, x0, y0, k):

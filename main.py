@@ -572,7 +572,7 @@ class BurstTrigger:
                                         dur = float(self.cfg.get("mavuika", {}).get("fx_duration", 4.0))
                                         self.fx.start_fire(dur)
                                         self._fx_until = time.monotonic() + dur + 2.0
-                                        self._log(f"[特效] 玛薇卡火焰爆炸启动（{dur:.0f}s，播放一次）")
+                                        self._log(f"[特效] 玛薇卡火焰爆炸启动（{dur:.1f}s，播放一次）")
                                     except Exception as e:
                                         self._log(f"[特效] 火焰爆炸启动失败: {e}")
                             else:

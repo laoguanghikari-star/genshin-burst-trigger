@@ -142,6 +142,6 @@
     "match_frames": 2,
     "window_seconds": 2.5,
     "audio_file": "assets/mavuika_bgm.wav",
-    "fx_duration": 4
+    "fx_duration": 3.5
   }
 }
