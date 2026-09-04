@@ -295,14 +295,28 @@ class App(tk.Tk):
 
     def _voice_launch_game(self):
         path = self.cfg.get("voice", {}).get("game_path", "")
-        if path and Path(path).exists():
-            import subprocess as sp
-            try:
-                sp.Popen([str(path)])
-                self.log("⚡ 原神——启动！！！")
-            except Exception as e:
+        if not (path and Path(path).exists()):
+            self.log(f"未找到游戏: {path}（可在 config.json 的 voice.game_path 配置）")
+            return
+        import subprocess as sp
+        launched = False
+        try:
+            sp.Popen([str(path)])
+            launched = True
+        except OSError as e:
+            if getattr(e, "winerror", None) == 740:
+                # 游戏清单要求管理员权限 → runas 提权启动（弹一次 UAC）
+                self.log("⚠ 游戏需要管理员权限，正在提权启动（请在 UAC 弹窗点击「是」）…")
+                import ctypes
+                rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", str(path), None, None, 1)
+                if rc > 32:
+                    launched = True
+                else:
+                    self.log(f"以管理员启动失败（错误码 {rc}），请右键游戏 exe 手动以管理员运行")
+            else:
                 self.log(f"游戏启动失败: {e}")
-                return
+        if launched:
+            self.log("⚡ 原神——启动！！！")
             if self.cfg.get("voice", {}).get("tts", True):
                 def _speak():
                     try:
@@ -311,8 +325,6 @@ class App(tk.Tk):
                     except Exception:
                         pass
                 threading.Thread(target=_speak, daemon=True).start()
-        else:
-            self.log(f"未找到游戏: {path}（可在 config.json 的 voice.game_path 配置）")
 
     # ------------------------------------------------------------ victory
     def _test_victory(self):
