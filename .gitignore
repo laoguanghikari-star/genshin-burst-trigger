@@ -14,6 +14,7 @@ output/
 build/
 dist/
 *.spec
+genshin_gui.exe
 
 # 系统
 .DS_Store
