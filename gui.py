@@ -63,6 +63,7 @@ class App(tk.Tk):
         self.fx = FxClient(enabled=self.cfg.get("fx", {}).get("enabled", True))
         self.voice = VoiceController(self.cfg, on_command=self._voice_action, log=self.log)
         self._log_queue: queue.Queue = queue.Queue()
+        self._cmd_queue: queue.Queue = queue.Queue()
 
         self._build()
         self._poll_status()
@@ -259,11 +260,24 @@ class App(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _voice_action(self, action: str):
-        """语音命令分发（语音线程调用；涉及 GUI 的操作切回主线程）。"""
+        """语音命令分发（语音线程调用）：只入队，主线程 _poll_status 时执行。
+        不用 tkinter after 跨线程调度（不可靠，会静默丢失）。"""
+        self._cmd_queue.put(action)
+
+    def _drain_cmds(self):
+        while True:
+            try:
+                action = self._cmd_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._run_voice_action(action)
+
+    def _run_voice_action(self, action: str):
+        # 主线程执行语音动作
         if action == "launch_game":
-            self.after(0, self._voice_launch_game)
+            self._voice_launch_game()
         elif action == "quit_game":
-            self.after(0, self._voice_quit_game)
+            self._voice_quit_game()
         elif action == "fx_on":
             self.log("语音指令：打开特效（30 秒演示）")
             self.fx.start(30)
@@ -271,11 +285,11 @@ class App(tk.Tk):
             self.log("语音指令：关闭特效")
             self.fx.stop()
         elif action == "preview_music":
-            self.after(0, self._preview)
+            self._preview()
         elif action == "start_detect":
-            self.after(0, self._start)
+            self._start()
         elif action == "stop_detect":
-            self.after(0, self._stop)
+            self._stop()
         else:
             self.log(f"未知语音命令: {action}")
 
@@ -283,11 +297,20 @@ class App(tk.Tk):
         path = self.cfg.get("voice", {}).get("game_path", "")
         if path and Path(path).exists():
             import subprocess as sp
-            sp.Popen([str(path)])
-            self.log("⚡ 原神——启动！！！")
+            try:
+                sp.Popen([str(path)])
+                self.log("⚡ 原神——启动！！！")
+            except Exception as e:
+                self.log(f"游戏启动失败: {e}")
+                return
             if self.cfg.get("voice", {}).get("tts", True):
-                from voice import speak
-                speak("原神，启动！")
+                def _speak():
+                    try:
+                        from voice import speak
+                        speak("原神，启动！")
+                    except Exception:
+                        pass
+                threading.Thread(target=_speak, daemon=True).start()
         else:
             self.log(f"未找到游戏: {path}（可在 config.json 的 voice.game_path 配置）")
 
@@ -514,6 +537,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------ misc
     def _poll_status(self):
         """每 500ms 刷新状态行（运行中时显示实时亮度与出战槽位）。"""
+        self._drain_cmds()
         self._drain_log()
         t = self.trigger
         if t is not None:
