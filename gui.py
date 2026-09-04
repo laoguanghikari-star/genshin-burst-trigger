@@ -26,7 +26,7 @@ from fx_client import FxClient
 from voice import VoiceController, list_devices
 import theme
 
-BASE = Path(__file__).resolve().parent
+BASE = (Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)).resolve().parent
 CONFIG_PATH = BASE / "config.json"
 
 
@@ -557,7 +557,73 @@ class App(tk.Tk):
         super().destroy()
 
 
+def _selftest() -> int:
+    """打包自检：验证关键依赖在 exe 环境下可用。结果写入 output/selftest_result.txt。"""
+    lines: list[str] = []
+    ok = True
+
+    def note(msg: str, good: bool = True):
+        nonlocal ok
+        lines.append(msg)
+        ok = ok and good
+
+    try:
+        cfg = load_cfg()
+        note("config.json OK")
+
+        from main import BurstRecognizer
+        rec = BurstRecognizer({"detection": cfg["detection"]})
+        note(f"BurstRecognizer ready={rec.ready}", rec.ready)
+        if rec.ready:
+            probe = BurstRecognizer(
+                {"detection": {**cfg["detection"], "negative_templates": []}}
+            )
+            import cv2
+            for ref in cfg["detection"].get("reference", []):
+                img = cv2.imread(str(BASE / ref))
+                if img is None:
+                    note(f"ref {ref}: READ FAIL", False)
+                    continue
+                s = probe.check(img)
+                note(f"ref {ref}: match {s:.3f} (need {probe.threshold:.2f})", s >= probe.threshold)
+
+        import dxcam
+        cam = dxcam.create(output_idx=0)
+        f = cam.grab()
+        note(f"dxcam grab: {None if f is None else f.shape}", f is not None)
+
+        import pygame
+        note(f"pygame {pygame.version.ver} OK")
+
+        from voice import VoiceController
+        mdl = Path(cfg.get("voice", {}).get("model_path", "models/vosk-model-small-cn-0.22"))
+        if not mdl.is_absolute():
+            mdl = BASE / mdl
+        note("vosk model dir exists=%s" % mdl.exists(), mdl.exists())
+
+        from fx_client import FxClient
+        FxClient(enabled=False)
+        note("FxClient OK")
+    except Exception as e:
+        note("ERROR: %s: %s" % (type(e).__name__, e), False)
+
+    out = BASE / "output" / "selftest_result.txt"
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass
+    return 0 if ok else 1
+
+
 def main():
+    if "--fx-server" in sys.argv:
+        # 打包 exe 内部拉起模式：fx_server 子进程（stdin 命令管道）
+        import fx_server as _fs
+        _fs.main()
+        return
+    if "--selftest" in sys.argv:
+        sys.exit(_selftest())
     # 允许从任意目录运行
     sys.path.insert(0, str(BASE))
     app = App()

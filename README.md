@@ -105,6 +105,17 @@ python gui.py
 - 测试按钮：**测试通关 / 测试玛薇卡 / 测试派蒙**（一键预览特效，无需进游戏）
 - 状态行实时显示亮度与出战槽位；详细日志可看每帧评分
 
+## 打包为 exe（免启动 cmd）
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File build_exe.ps1
+```
+
+- 产物：`dist/genshin_gui/genshin_gui.exe`（onedir，资源外置，自包含 config/assets/models）
+- 双击 exe 即启动图形化控制台；特效子进程自动以 `--fx-server` 模式拉起自身，无需 Python
+- 发布目录为便携版：拷贝 `dist/genshin_gui/` 至任意机器（保持 2K 分辨率）即可运行
+- 内置自检：`genshin_gui.exe --selftest`（结果写 `output/selftest_result.txt`，退出码 0=通过）
+
 ## 命令行方式
 
 ```powershell

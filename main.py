@@ -25,7 +25,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-BASE = Path(__file__).resolve().parent
+BASE = (Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)).resolve().parent
 CONFIG_PATH = BASE / "config.json"
 
 

@@ -40,7 +40,7 @@ import cv2
 import numpy as np
 import tkinter as tk
 
-BASE = Path(__file__).resolve().parent
+BASE = (Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)).resolve().parent
 CONFIG_PATH = BASE / "config.json"
 
 W, H = 2560, 1440          # 窗口（屏幕）尺寸
@@ -857,6 +857,7 @@ class LaserApp:
 def main():
     parser = argparse.ArgumentParser(description="舞台灯光特效进程 v3")
     parser.add_argument("--demo", default="", help="演示（show:秒数 / fire:秒数；到点自动退出）")
+    parser.add_argument("--fx-server", action="store_true", help="打包 exe 内部拉起模式（忽略）")
     args = parser.parse_args()
 
     cfg = load_fx_cfg()

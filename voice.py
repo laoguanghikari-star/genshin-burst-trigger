@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import queue
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -26,7 +27,7 @@ import numpy as np
 import sounddevice as sd
 import vosk
 
-BASE = Path(__file__).resolve().parent
+BASE = (Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)).resolve().parent
 
 
 def speak(text: str) -> bool:

@@ -17,8 +17,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent
+BASE = (Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)).resolve().parent
 SERVER = BASE / "fx_server.py"
+
+_FROZEN = getattr(sys, "frozen", False)
 
 
 class FxClient:
@@ -26,13 +28,19 @@ class FxClient:
         self.enabled = enabled
         self.proc: subprocess.Popen | None = None
 
+    def _server_cmd(self) -> list[str]:
+        if _FROZEN:
+            # 打包后：拉起自身（exe --fx-server 走 fx_server 入口）
+            return [sys.executable, "--fx-server"]
+        return [sys.executable, str(SERVER)]
+
     def _ensure(self) -> bool:
         if not self.enabled:
             return False
         if self.proc is None or self.proc.poll() is not None:
             try:
                 self.proc = subprocess.Popen(
-                    [sys.executable, str(SERVER)],
+                    self._server_cmd(),
                     stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,

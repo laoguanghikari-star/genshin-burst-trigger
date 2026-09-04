@@ -10,6 +10,11 @@ venv/
 *.log
 output/
 
+# PyInstaller
+build/
+dist/
+*.spec
+
 # 系统
 .DS_Store
 Thumbs.db
