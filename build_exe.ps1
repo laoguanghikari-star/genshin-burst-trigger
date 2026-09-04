@@ -5,6 +5,7 @@ Set-Location (Split-Path $PSScriptRoot -Parent)
 
 Write-Host "== [1/3] PyInstaller 构建 =="
 python -m PyInstaller --noconfirm --clean --windowed --name genshin_gui `
+  --icon assets/helper_icon.ico `
   --collect-all dxcam --collect-all vosk --collect-all sounddevice `
   --hidden-import fx_server gui.py
 
