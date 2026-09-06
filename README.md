@@ -73,6 +73,7 @@ score = 0.25×冰蓝占比 + 0.20×HSV直方图相关 + 0.55×姿态模板匹配
 对着麦克风喊「**原神 启动！**」→ 直接启动游戏 + TTS 播报「原神，启动！」。
 
 - vosk 离线中文关键词识别（模型随包分发，全本地无网络）
+- **唤醒词机制**（`voice.wake`，默认开）：先喊「派蒙派蒙」唤醒（有 TTS 回应），10 秒内说指令才生效；命中一条或超时自动休眠，普通闲聊不再误触发；未唤醒时说指令会提示先唤醒
 - 内置命令（`config.json` → `voice.commands` 可扩展）：原神 启动（含同音字变体）/ 开始 检测 / 停止 检测
 - GUI 勾选「语音命令」即开始聆听；「测试麦克风」检查输入电平与识别结果
 
@@ -139,7 +140,7 @@ python fx_server.py --demo paimon:10 # 特效演示：派蒙视频 10 秒
 | shop | enabled / reference / template_roi / match_threshold / highlight_roi / highlight_min / dark_roi / dark_max / check_interval / stop_misses / audio_file / fade_seconds | 商城氪金页监控（三重信号） | 0.45 / [60,640,300,120] / 150 / [60,540,300,90] / 130 / 0.5s / 6 次 / shop_bgm.mp3 / 1.5s |
 | startup | enabled / icon_roi / trigger_ratio / release_ratio / min_clusters / margin_white / check_interval / paimon_duration | 启动读条监控（触发时机） | [900,660,850,130] / 0.035 / 0.02 / 2 / 0.995 / 0.3s / 10.0 |
 | fx | enabled / intensity / fade_seconds / burst_duration / fire_frames / paimon_frames / paimon_intensity / victory_frames / shop_kong / shop_ying / shop_text / shop_font_size | 特效配置（含商城立绘与警示语文案） | 0.87 / 2 / 27 / 各帧序列 / 1.15 / xujia_kong.png / xujia_ying.png |
-| voice | enabled / model_path / game_path / tts / commands | 语音控制 | vosk 模型 / YuanShen.exe / true |
+| voice | enabled / model_path / game_path / tts / commands / wake / wake_word / wake_timeout_seconds / wake_tts | 语音控制（先喊唤醒词再下指令，防误触发） | vosk 模型 / YuanShen.exe / true / true / 派蒙派蒙 / 10s / true |
 
 ## 已知限制
 

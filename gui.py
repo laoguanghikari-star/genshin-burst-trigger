@@ -562,7 +562,11 @@ class App(tk.Tk):
         # 语音状态
         if self.voice.listening:
             heard = f" | 最近: {self.voice.last_heard}" if self.voice.last_heard else ""
-            self.var_voice_status.set(f"语音：聆听中…{heard}")
+            if getattr(self.voice, "wake_enabled", False):
+                w = "🔔 已唤醒" if self.voice.wake_armed else "💤 待唤醒"
+                self.var_voice_status.set(f"语音：聆听中 | {w}{heard}")
+            else:
+                self.var_voice_status.set(f"语音：聆听中…{heard}")
         elif self.var_voice.get():
             self.var_voice_status.set("语音：已开启但未运行（检查日志）")
         else:

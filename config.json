@@ -91,11 +91,15 @@
     }
   },
   "voice": {
-    "enabled": false,
+    "enabled": true,
     "model_path": "models/vosk-model-small-cn-0.22",
     "device": null,
     "game_path": "C:/Program Files/miHoYo Launcher/games/Genshin Impact Game/YuanShen.exe",
     "tts": true,
+    "wake": true,
+    "wake_word": "派蒙派蒙",
+    "wake_timeout_seconds": 10,
+    "wake_tts": true,
     "commands": {
       "原神 启动": "launch_game",
       "启动 原神": "launch_game",

@@ -60,6 +60,14 @@ class VoiceController:
         self.commands = v.get("commands", {})
         self.on_command = on_command
         self.log = log if callable(log) else (lambda m: print(f"[voice] {m}"))
+        # 唤醒词：喊「wake_word」后 wake_timeout 秒内指令才生效（防误触发）
+        self.wake_enabled = bool(v.get("wake", True))
+        self.wake_word = v.get("wake_word", "派蒙派蒙")
+        self.wake_timeout = float(v.get("wake_timeout_seconds", 10))
+        self.wake_tts = bool(v.get("wake_tts", True))
+        self.wake_armed = False
+        self._armed_until = 0.0
+        self._last_hint = 0.0
         self._model = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -95,6 +103,10 @@ class VoiceController:
     # ------------------------------------------------------------ 识别循环
     def _run(self):
         keywords = list(self.commands.keys())
+        if self.wake_enabled:
+            # 唤醒词进关键词表：连续版 + 词根（vosk 可能输出「派蒙派蒙」或「派蒙 派蒙」）
+            kw = "".join(self.wake_word.split())
+            keywords += [kw, " ".join(kw)]
         try:
             rec = vosk.KaldiRecognizer(self._model, self.sample_rate,
                                        json.dumps(keywords, ensure_ascii=False))
@@ -110,7 +122,10 @@ class VoiceController:
             with sd.RawInputStream(samplerate=self.sample_rate, blocksize=4000,
                                    device=self.device, dtype="int16",
                                    channels=1, callback=callback):
-                self.log(f"语音聆听中…（模型就绪，说「原神 启动」试试）")
+                if self.wake_enabled:
+                    self.log(f"语音聆听中…（先喊「{self.wake_word}」唤醒，再说指令）")
+                else:
+                    self.log("语音聆听中…（模型就绪，说「原神 启动」试试）")
                 while not self._stop.is_set():
                     try:
                         data = q.get(timeout=0.5)
@@ -129,14 +144,55 @@ class VoiceController:
             self.log(f"麦克风错误: {e}")
         self.log("语音聆听已结束")
 
+    # ------------------------------------------------------------ 唤醒与指令
+    def _wake_token(self) -> str:
+        """唤醒词去掉空格后的连续形式（如「派蒙派蒙」）。"""
+        return "".join(self.wake_word.split())
+
+    def _check_armed_expiry(self):
+        if self.wake_armed and time.monotonic() > self._armed_until:
+            self.wake_armed = False
+            self.log(f"唤醒超时，已休眠（再喊「{self.wake_word}」唤醒）")
+
+    def _arm(self):
+        self.wake_armed = True
+        self._armed_until = time.monotonic() + self.wake_timeout
+        self.log(f"🔔 已唤醒（{self.wake_timeout:.0f}s 内说指令，如「原神 启动」；一条后自动休眠）")
+        if self.wake_tts:
+            try:
+                threading.Thread(target=lambda: speak("派蒙在，请吩咐"), daemon=True).start()
+            except Exception:
+                pass
+
+    def _hint_not_armed(self):
+        now = time.monotonic()
+        if now - self._last_hint > 12:
+            self._last_hint = now
+            self.log(f"语音未唤醒：先喊「{self.wake_word}」再说指令")
+
     def _maybe_fire(self, text: str):
-        """命中判定：短语完整出现在文本中，或短语的所有词都在文本中
-        （vosk 可能漏掉个别词，如只识别出「启动」，此时不触发以免误报）。"""
+        """命中判定：
+        - 唤醒词命中（词根出现 ≥2 次，容错 vosk 分词）→ 唤醒
+        - 唤醒后：短语完整出现或全部词出现 → 执行并自动休眠
+        - 未唤醒时说指令 → 低频提示先唤醒（防误触发）"""
+        if self.wake_enabled:
+            root = self._wake_token()[: len(self._wake_token()) // 2]
+            if root and text.count(root) >= 2:
+                self._arm()
+                return
+            self._check_armed_expiry()
+            if not self.wake_armed:
+                for phrase in self.commands:
+                    if phrase in text or all(w in text for w in phrase.split()):
+                        self._hint_not_armed()
+                        return
+                return
         for phrase, action in self.commands.items():
             words = phrase.split()
             hit = phrase in text or (len(words) > 1 and all(w in text for w in words))
             if hit:
                 self.last_heard = phrase
+                self.wake_armed = False  # 一条指令后自动休眠
                 self.log(f"命中命令「{phrase}」-> {action}")
                 try:
                     if self.on_command:
