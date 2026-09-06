@@ -171,26 +171,26 @@ class VoiceController:
             self.log(f"语音未唤醒：先喊「{self.wake_word}」再说指令")
 
     def _maybe_fire(self, text: str):
-        """命中判定：
-        - 唤醒词命中（词根出现 ≥2 次，容错 vosk 分词）→ 唤醒
-        - 唤醒后：短语完整出现或全部词出现 → 执行并自动休眠
+        """命中判定（先归一化：去掉所有空格，兼容 vosk 逐字分词如「派 蒙 派 蒙」）：
+        - 唤醒词命中（连续出现或词根 ≥2 次）→ 唤醒
+        - 唤醒后：短语命中 → 执行并自动休眠
         - 未唤醒时说指令 → 低频提示先唤醒（防误触发）"""
+        norm = "".join(text.split())
         if self.wake_enabled:
-            root = self._wake_token()[: len(self._wake_token()) // 2]
-            if root and text.count(root) >= 2:
+            token = self._wake_token()  # 如「派蒙派蒙」
+            root = token[: len(token) // 2]  # 如「派蒙」
+            if (token and token in norm) or (root and norm.count(root) >= 2):
                 self._arm()
                 return
             self._check_armed_expiry()
             if not self.wake_armed:
                 for phrase in self.commands:
-                    if phrase in text or all(w in text for w in phrase.split()):
+                    if "".join(phrase.split()) in norm:
                         self._hint_not_armed()
                         return
                 return
         for phrase, action in self.commands.items():
-            words = phrase.split()
-            hit = phrase in text or (len(words) > 1 and all(w in text for w in words))
-            if hit:
+            if "".join(phrase.split()) in norm:
                 self.last_heard = phrase
                 self.wake_armed = False  # 一条指令后自动休眠
                 self.log(f"命中命令「{phrase}」-> {action}")
