@@ -65,6 +65,7 @@ class VoiceController:
         self.wake_word = v.get("wake_word", "派蒙派蒙")
         self.wake_timeout = float(v.get("wake_timeout_seconds", 10))
         self.wake_tts = bool(v.get("wake_tts", True))
+        self.wake_audio = v.get("wake_audio", "")  # 唤醒回应音频（优先于 TTS）
         self.wake_armed = False
         self._armed_until = 0.0
         self._last_hint = 0.0
@@ -158,6 +159,24 @@ class VoiceController:
         self.wake_armed = True
         self._armed_until = time.monotonic() + self.wake_timeout
         self.log(f"🔔 已唤醒（{self.wake_timeout:.0f}s 内说指令，如「原神 启动」；一条后自动休眠）")
+        self._play_wake_reply()
+
+    def _play_wake_reply(self):
+        """唤醒回应：优先播放配置的音频文件（pygame 异步，不阻塞识别）；
+        没有文件或失败时退回 TTS。"""
+        audio = Path(self.wake_audio) if self.wake_audio else Path()
+        if audio and not audio.is_absolute():
+            audio = BASE / audio
+        if audio and audio.exists():
+            try:
+                import pygame
+                if not pygame.mixer.get_init():
+                    pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+                snd = pygame.mixer.Sound(str(audio))
+                snd.play()
+                return
+            except Exception:
+                pass
         if self.wake_tts:
             try:
                 threading.Thread(target=lambda: speak("派蒙在，请吩咐"), daemon=True).start()

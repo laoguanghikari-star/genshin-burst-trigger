@@ -140,7 +140,7 @@ python fx_server.py --demo paimon:10 # 特效演示：派蒙视频 10 秒
 | shop | enabled / reference / template_roi / match_threshold / highlight_roi / highlight_min / dark_roi / dark_max / check_interval / stop_misses / audio_file / fade_seconds | 商城氪金页监控（三重信号） | 0.45 / [60,640,300,120] / 150 / [60,540,300,90] / 130 / 0.5s / 6 次 / shop_bgm.mp3 / 1.5s |
 | startup | enabled / icon_roi / trigger_ratio / release_ratio / min_clusters / margin_white / check_interval / paimon_duration | 启动读条监控（触发时机） | [900,660,850,130] / 0.035 / 0.02 / 2 / 0.995 / 0.3s / 10.0 |
 | fx | enabled / intensity / fade_seconds / burst_duration / fire_frames / paimon_frames / paimon_intensity / victory_frames / shop_kong / shop_ying / shop_text / shop_font_size | 特效配置（含商城立绘与警示语文案） | 0.87 / 2 / 27 / 各帧序列 / 1.15 / xujia_kong.png / xujia_ying.png |
-| voice | enabled / model_path / game_path / tts / commands / wake / wake_word / wake_timeout_seconds / wake_tts | 语音控制（先喊唤醒词再下指令，防误触发） | vosk 模型 / YuanShen.exe / true / true / 派蒙派蒙 / 10s / true |
+| voice | enabled / model_path / game_path / tts / commands / wake / wake_word / wake_timeout_seconds / wake_tts / wake_audio | 语音控制（先喊唤醒词再下指令；唤醒回应音频优先于 TTS） | vosk 模型 / YuanShen.exe / true / true / 派蒙派蒙 / 10s / true / assets/wake_reply.wav |
 
 ## 已知限制
 

@@ -100,6 +100,7 @@
     "wake_word": "派蒙派蒙",
     "wake_timeout_seconds": 10,
     "wake_tts": true,
+    "wake_audio": "assets/wake_reply.wav",
     "commands": {
       "原神 启动": "launch_game",
       "启动 原神": "launch_game",
