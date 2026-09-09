@@ -534,10 +534,11 @@ class BurstTrigger:
         self.debug = cfg.get("debug", False)
         self.fx = fx
         self.use_slot_check = bool(cfg.get("use_slot_check", False))
+        self._log = log if callable(log) else (lambda msg: print(msg))
         d = cfg.get("detection", {})
         self.det_mode = d.get("mode", "recognition")  # recognition | flash | both
         self.window_sec = float(d.get("window_seconds", cfg.get("flash_window_seconds", 1.2)))
-        self.recognizer = BurstRecognizer(cfg) if self.det_mode in ("recognition", "both") else None
+        self.recognizer = self._build_rec("detection")
         self._recog_hits = 0
         self.completion = CompletionMonitor(cfg)
         self.shop = ShopMonitor(cfg)
@@ -546,7 +547,6 @@ class BurstTrigger:
 
         import threading
         self._stop = stop_event if stop_event is not None else threading.Event()
-        self._log = log if callable(log) else (lambda msg: print(msg))
 
         self._q_pressed_at: float | None = None
         self._q_pending_at: float | None = None
@@ -556,42 +556,83 @@ class BurstTrigger:
         self._last_trigger_at = 0.0
         self._last_q_at = 0.0
 
-        # 玛薇卡独立识别器（可选；config 的 mavuika 段启用）
-        self.mavuika_rec: BurstRecognizer | None = None
+        # 玛薇卡 / 哥伦比娅独立识别器（各自 config 段启用）
+        self.mavuika_rec: BurstRecognizer | None = self._build_rec("mavuika")
         self._mav_hits = 0
         self.last_mavuika_score = 0.0
-        mav_cfg = cfg.get("mavuika", {})
-        if mav_cfg.get("enabled", False) and self.det_mode in ("recognition", "both"):
-            try:
-                mr = BurstRecognizer({"detection": mav_cfg})
-                if mr.ready:
-                    self.mavuika_rec = mr
-                    self._log(f"[玛薇卡] 爆发识别已加载（{len(mr._refs)} 张参考图，{len(mr._neg_tpls)} 个负样本）")
-                else:
-                    self._log("[玛薇卡] 参考图缺失，识别未启用")
-            except Exception as e:
-                self._log(f"[玛薇卡] 识别加载失败: {e}")
-
-        # 哥伦比娅独立识别器（可选；config 的 columbina 段启用）
-        self.columbina_rec: BurstRecognizer | None = None
+        self.columbina_rec: BurstRecognizer | None = self._build_rec("columbina")
         self._col_hits = 0
         self.last_columbina_score = 0.0
-        col_cfg = cfg.get("columbina", {})
-        if col_cfg.get("enabled", False) and self.det_mode in ("recognition", "both"):
-            try:
-                cr = BurstRecognizer({"detection": col_cfg})
-                if cr.ready:
-                    self.columbina_rec = cr
-                    self._log(f"[哥伦比娅] 爆发识别已加载（{len(cr._refs)} 张参考图，{len(cr._neg_tpls)} 个负样本）")
-                else:
-                    self._log("[哥伦比娅] 参考图缺失，识别未启用")
-            except Exception as e:
-                self._log(f"[哥伦比娅] 识别加载失败: {e}")
 
         # GUI 轮询用（只读状态）
         self.last_lum: float | None = None
         self.last_slot: int | None = None
         self.last_score: float = 0.0  # 奥黛塔最近一次识别评分
+
+    # ------------------------------------------------------------ 运行时启停
+    _REC_LABELS = {"detection": "奥黛塔", "mavuika": "玛薇卡", "columbina": "哥伦比娅"}
+    _MON_LABELS = {"completion": "通关庆祝", "shop": "商城立绘", "startup": "启动派蒙"}
+
+    def _build_rec(self, key: str) -> "BurstRecognizer | None":
+        """构造某角色的爆发识别器；未启用/参考图缺失/异常时返回 None 并写日志。"""
+        label = self._REC_LABELS.get(key, key)
+        if self.det_mode not in ("recognition", "both"):
+            self._log(f"[{label}] detection.mode={self.det_mode}，识别通道未启用")
+            return None
+        if key == "detection":
+            sec = self.cfg.get("detection", {})
+            default_on = True
+        else:
+            sec = self.cfg.get(key, {})
+            default_on = False
+        if not sec.get("enabled", default_on):
+            self._log(f"[{label}] 已在配置中关闭")
+            return None
+        try:
+            rec = BurstRecognizer(self.cfg) if key == "detection" else BurstRecognizer({"detection": sec})
+            if rec.ready:
+                self._log(f"[{label}] 爆发识别已加载（{len(rec._refs)} 张参考图，{len(rec._neg_tpls)} 个负样本）")
+                return rec
+            self._log(f"[{label}] 参考图缺失，识别未启用")
+        except Exception as e:
+            self._log(f"[{label}] 识别加载失败: {e}")
+        return None
+
+    def set_detector_enabled(self, key: str, enabled: bool) -> str:
+        """运行时启停某检测项（立即生效），并同步内存配置。返回给用户看的说明。
+
+        key: detection / mavuika / columbina / completion / shop / startup
+        """
+        enabled = bool(enabled)
+        if key in ("detection", "mavuika", "columbina"):
+            self.cfg.setdefault(key, {})["enabled"] = enabled
+            attr = {"detection": "recognizer", "mavuika": "mavuika_rec",
+                    "columbina": "columbina_rec"}[key]
+            label = self._REC_LABELS[key]
+            if enabled:
+                rec = self._build_rec(key)
+                setattr(self, attr, rec)
+                return f"{label}爆发识别已启用" if rec is not None else f"{label}参考图缺失/加载失败，启用失败"
+            setattr(self, attr, None)
+            return f"{label}爆发识别已停用（不再触发 BGM/特效）"
+        mon = {"completion": self.completion, "shop": self.shop, "startup": self.startup}.get(key)
+        if mon is None:
+            return f"未知检测项: {key}"
+        self.cfg.setdefault(key, {})["enabled"] = enabled
+        mon.enabled = enabled
+        label = self._MON_LABELS.get(key, key)
+        return f"{label}监控已{'启用' if enabled else '停用'}"
+
+    def detector_state(self, key: str) -> str:
+        """当前运行状态（供 GUI 显示）。"""
+        if key in ("detection", "mavuika", "columbina"):
+            attr = {"detection": "recognizer", "mavuika": "mavuika_rec",
+                    "columbina": "columbina_rec"}[key]
+            return "运行中" if getattr(self, attr, None) is not None else "已停用"
+        mon = {"completion": self.completion, "shop": self.shop, "startup": self.startup}.get(key)
+        if mon is None:
+            return "?"
+        return "监控中" if getattr(mon, "enabled", False) else "已停用"
 
     # -- 键盘钩子回调（pynput 线程）--
     def _on_press(self, key) -> None:

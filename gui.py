@@ -41,13 +41,20 @@ def save_cfg(cfg: dict) -> None:
 
 
 class App(tk.Tk):
-    # 面板矩形（用于烘焙半透明圆角面板进背景图）：(x, y, w, h, 圆角)
-    PANEL_RECTS = [
+    # 第 1 页（总控）面板矩形（用于烘焙半透明圆角面板进背景图）：(x, y, w, h, 圆角)
+    PANEL_RECTS_P1 = [
         (10, 52, 800, 232, 18),   # 检测设置
         (10, 290, 800, 104, 18),  # 音乐音频
         (10, 400, 800, 104, 18),  # 灯光特效
         (10, 510, 800, 62, 18),   # 语音控制
         (10, 650, 800, 220, 18),  # 运行日志
+    ]
+    # 第 2 页（特效检测）面板矩形
+    PANEL_RECTS_P2 = [
+        (10, 52, 800, 268, 18),   # 爆发检测
+        (10, 336, 800, 218, 18),  # 场景监控
+        (10, 570, 800, 130, 18),  # 灯光特效
+        (10, 716, 800, 96, 18),   # 操作按钮
     ]
 
     def __init__(self):
@@ -69,18 +76,21 @@ class App(tk.Tk):
         self._poll_status()
 
     # ------------------------------------------------------------ UI
-    def _ensure_bg(self) -> bool:
+    def _ensure_bg(self, rects, out_name: str = "gui_bg_comp.png") -> bool:
         """烘焙半透明面板进背景图（奥黛塔透出来）。返回是否成功。"""
         src = BASE / "assets" / "gui_bg.png"
-        out = BASE / "assets" / "gui_bg_comp.png"
+        out = BASE / "assets" / out_name
         if not src.exists():
             return False
         try:
             if not out.exists() or src.stat().st_mtime > out.stat().st_mtime:
                 # 面板填充色 = 控件底色 BG，控件"黑边"与面板融为一体
-                theme.bake_panels(src, out, self.PANEL_RECTS,
-                                  alpha=185, fill=(13, 27, 46), title_band=44)
-            self._bg_photo = tk.PhotoImage(file=str(out))
+                theme.bake_panels(src, out, rects, alpha=185, fill=(13, 27, 46), title_band=44)
+            photo = tk.PhotoImage(file=str(out))
+            if out_name == "gui_bg_comp.png":
+                self._bg_photo = photo
+            else:
+                self._bg_photo2 = photo
             return True
         except Exception:
             return False
@@ -88,22 +98,63 @@ class App(tk.Tk):
     def _build(self):
         theme.apply_theme(self)
 
-        # -- 背景（奥黛塔 + 半透明圆角面板） --
-        if self._ensure_bg():
-            tk.Label(self, image=self._bg_photo, bg=theme.BG).place(x=0, y=0, relwidth=1, relheight=1)
+        # -- 两个页面容器（切换用 place/place_forget，不影响顶部导航层序） --
+        self.page1 = tk.Frame(self, bg=theme.BG)
+        self.page2 = tk.Frame(self, bg=theme.BG)
+        self.page1.place(x=0, y=0, relwidth=1, relheight=1)
+        self.page2.place(x=0, y=0, relwidth=1, relheight=1)
+        self.page2.place_forget()
+
+        if self._ensure_bg(self.PANEL_RECTS_P1):
+            tk.Label(self.page1, image=self._bg_photo, bg=theme.BG).place(x=0, y=0, relwidth=1, relheight=1)
+        if self._ensure_bg(self.PANEL_RECTS_P2, "gui_bg_comp2.png"):
+            tk.Label(self.page2, image=self._bg_photo2, bg=theme.BG).place(x=0, y=0, relwidth=1, relheight=1)
 
         # -- 窗内标题横幅（◆ 钻石 + ❋ 羽饰） --
-        theme.HeaderBanner(self, "原神爆发触发 · 控制台").pack(fill="x")
+        self._header = theme.HeaderBanner(self, "原神爆发触发 · 控制台")
+        self._header.pack(fill="x")
 
-        lab = theme.BG  # 控件底色与烘焙面板色一致，视觉上"浮"在半透明面板上
+        self._build_page1()
+        self._build_page2()
+
+        # -- 顶部页签（最后创建 → 浮在页面之上） --
+        self.tabs = []
+        nav = self  # 别名：避免下面的页1 批量替换误改页签 parent
+        for i, text in enumerate(("⚙ 总控", "✨ 特效检测")):
+            lbl = tk.Label(nav, text=text, font=("Microsoft YaHei UI", 10, "bold"),
+                           padx=16, pady=5, bd=0, cursor="hand2")
+            lbl.place(x=520 + i * 140, y=7)
+            lbl.bind("<Button-1>", lambda e, idx=i: self._show_page(idx))
+            self.tabs.append(lbl)
+        self._show_page(0)
+        self.log("控制台就绪。改完配置记得点「保存配置」；启动检测前请把游戏切成无边框窗口。")
+
+    def _show_page(self, idx: int):
+        """切换页面（0=总控，1=特效检测）。"""
+        self._page = idx
+        if idx == 0:
+            self.page2.place_forget()
+            self.page1.place(x=0, y=0, relwidth=1, relheight=1)
+        else:
+            self.page1.place_forget()
+            self.page2.place(x=0, y=0, relwidth=1, relheight=1)
+        for i, lbl in enumerate(self.tabs):
+            if i == idx:
+                lbl.config(bg=theme.ICE, fg="#06283f")
+            else:
+                lbl.config(bg="#16294a", fg=theme.TEXT_DIM)
+            lbl.lift()  # 页签始终浮在标题横幅之上
+
+    def _build_page1(self):
+        lab = theme.BG
 
         def L(x, y, text, fg=theme.TEXT, bold=False):
-            tk.Label(self, text=text, bg=lab, fg=fg, bd=0, highlightthickness=0,
+            tk.Label(self.page1, text=text, bg=lab, fg=fg, bd=0, highlightthickness=0,
                      font=("Microsoft YaHei UI", 10, "bold" if bold else "normal")).place(x=x, y=y)
 
         def VL(x, y, var, fg=theme.TEXT):
             """值标签（无边框）。"""
-            lbl = tk.Label(self, textvariable=var, bg=lab, fg=fg, bd=0, highlightthickness=0,
+            lbl = tk.Label(self.page1, textvariable=var, bg=lab, fg=fg, bd=0, highlightthickness=0,
                            font=("Microsoft YaHei UI", 10))
             lbl.place(x=x, y=y)
             return lbl
@@ -111,115 +162,210 @@ class App(tk.Tk):
         # -- 检测设置 --
         L(26, 94, "触发快捷键")
         self.var_hotkey = tk.StringVar(value=str(self.cfg.get("hotkey", "q")))
-        ttk.Combobox(self, textvariable=self.var_hotkey, values=["q", "e", "r", "f", "t"],
+        ttk.Combobox(self.page1, textvariable=self.var_hotkey, values=["q", "e", "r", "f", "t"],
                      width=4).place(x=150, y=90)
 
         det_cfg = self.cfg.get("detection", {})
         L(26, 126, "识别匹配阈值")
         self.var_threshold = tk.DoubleVar(value=float(det_cfg.get("match_threshold", 0.55)))
-        theme.RoundSlider(self, 0.30, 0.80, variable=self.var_threshold,
+        theme.RoundSlider(self.page1, 0.30, 0.80, variable=self.var_threshold,
                           command=lambda v: self._sync_slider_label()).place(x=150, y=124)
-        self.lbl_threshold = tk.Label(self, text=f"{self.var_threshold.get():.2f}",
+        self.lbl_threshold = tk.Label(self.page1, text=f"{self.var_threshold.get():.2f}",
                                       bg=lab, fg=theme.TEXT, bd=0, highlightthickness=0)
         self.lbl_threshold.place(x=560, y=128)
 
         L(26, 158, "识别窗口 (秒)")
         self.var_window = tk.DoubleVar(value=float(det_cfg.get("window_seconds", 2.5)))
-        theme.RoundSlider(self, 1.0, 4.0, variable=self.var_window,
+        theme.RoundSlider(self.page1, 1.0, 4.0, variable=self.var_window,
                           command=lambda v: self._sync_window_label()).place(x=150, y=156)
-        self.lbl_window = tk.Label(self, text=f"{self.var_window.get():.1f}",
+        self.lbl_window = tk.Label(self.page1, text=f"{self.var_window.get():.1f}",
                                    bg=lab, fg=theme.TEXT, bd=0, highlightthickness=0)
         self.lbl_window.place(x=560, y=160)
 
         L(26, 190, "冷却时间 (秒)")
         self.var_cooldown = tk.IntVar(value=int(self.cfg.get("cooldown_seconds", 20)))
-        theme.RoundSlider(self, 5, 60, variable=self.var_cooldown,
+        theme.RoundSlider(self.page1, 5, 60, variable=self.var_cooldown,
                           command=lambda v: self._sync_cooldown_label()).place(x=150, y=188)
-        self.lbl_cooldown = tk.Label(self, text=f"{self.var_cooldown.get()}",
+        self.lbl_cooldown = tk.Label(self.page1, text=f"{self.var_cooldown.get()}",
                                      bg=lab, fg=theme.TEXT, bd=0, highlightthickness=0)
         self.lbl_cooldown.place(x=560, y=192)
 
         L(26, 222, "抓帧率 (fps)")
         self.var_fps = tk.StringVar(value=str(self.cfg.get("capture_fps", 30)))
-        ttk.Combobox(self, textvariable=self.var_fps, values=["15", "20", "30", "45", "60"],
+        ttk.Combobox(self.page1, textvariable=self.var_fps, values=["15", "20", "30", "45", "60"],
                      width=4).place(x=150, y=218)
 
         self.var_debug = tk.BooleanVar(value=bool(self.cfg.get("debug", False)))
-        theme.round_check(self, "详细日志（打印每帧评分/判定）", self.var_debug).place(x=26, y=248)
+        theme.round_check(self.page1, "详细日志（打印每帧评分/判定）", self.var_debug).place(x=26, y=248)
 
         # -- 音乐音频 --
         L(26, 324, "音量 (%)")
         self.var_volume = tk.IntVar(value=int(self.cfg.get("volume", 0.9) * 100))
-        theme.RoundSlider(self, 0, 100, variable=self.var_volume,
+        theme.RoundSlider(self.page1, 0, 100, variable=self.var_volume,
                           command=lambda v: self._sync_volume_label()).place(x=150, y=322)
-        self.lbl_volume = tk.Label(self, text=f"{self.var_volume.get()}%",
+        self.lbl_volume = tk.Label(self.page1, text=f"{self.var_volume.get()}%",
                                    bg=lab, fg=theme.TEXT, bd=0, highlightthickness=0)
         self.lbl_volume.place(x=560, y=326)
 
         L(26, 356, "BGM 文件")
         self.var_audio = tk.StringVar(value=str(self.cfg.get("audio_file", "assets/burst_bgm.wav")))
-        ttk.Entry(self, textvariable=self.var_audio).place(x=150, y=352, width=380)
-        theme.round_button(self, "浏览", self._browse_audio, kind="normal").place(x=545, y=350)
+        ttk.Entry(self.page1, textvariable=self.var_audio).place(x=150, y=352, width=380)
+        theme.round_button(self.page1, "浏览", self._browse_audio, kind="normal").place(x=545, y=350)
 
         # -- 灯光特效 --
         self.var_fx = tk.BooleanVar(value=bool(self.cfg.get("fx", {}).get("enabled", True)))
-        theme.round_check(self, "灯光特效（探照灯 / 频谱 / 粒子 / 雪花 / GIF）", self.var_fx).place(x=26, y=436)
+        theme.round_check(self.page1, "灯光特效（探照灯 / 频谱 / 粒子 / 雪花 / GIF）", self.var_fx).place(x=26, y=436)
 
         L(26, 468, "灯光强度 (%)")
         self.var_fx_intensity = tk.IntVar(value=int(self.cfg.get("fx", {}).get("intensity", 0.6) * 100))
-        theme.RoundSlider(self, 10, 100, variable=self.var_fx_intensity,
+        theme.RoundSlider(self.page1, 10, 100, variable=self.var_fx_intensity,
                           command=lambda v: self._sync_fx_label()).place(x=150, y=466)
-        self.lbl_fx = tk.Label(self, text=f"{self.var_fx_intensity.get()}%",
+        self.lbl_fx = tk.Label(self.page1, text=f"{self.var_fx_intensity.get()}%",
                                bg=lab, fg=theme.TEXT, bd=0, highlightthickness=0)
         self.lbl_fx.place(x=560, y=470)
 
         # -- 语音控制 --
         self.var_voice = tk.BooleanVar(value=bool(self.cfg.get("voice", {}).get("enabled", False)))
-        theme.round_check(self, "语音命令", self.var_voice,
+        theme.round_check(self.page1, "语音命令", self.var_voice,
                           command=self._voice_toggle).place(x=26, y=534)
         self.var_voice_status = tk.StringVar(value="语音：未开启")
-        tk.Label(self, textvariable=self.var_voice_status, bg=lab,
+        tk.Label(self.page1, textvariable=self.var_voice_status, bg=lab,
                  fg=theme.TEXT_DIM, bd=0, highlightthickness=0,
                  font=("Microsoft YaHei UI", 9)).place(x=130, y=538)
-        tk.Label(self, text="麦克风:", bg=lab, fg=theme.TEXT, bd=0, highlightthickness=0,
+        tk.Label(self.page1, text="麦克风:", bg=lab, fg=theme.TEXT, bd=0, highlightthickness=0,
                  font=("Microsoft YaHei UI", 10)).place(x=310, y=536)
         self.var_mic = tk.StringVar(value=self.cfg.get("voice", {}).get("device") or "默认")
-        self.mic_combo = ttk.Combobox(self, textvariable=self.var_mic,
+        self.mic_combo = ttk.Combobox(self.page1, textvariable=self.var_mic,
                                       values=["默认"] + list_devices(), width=14)
         self.mic_combo.place(x=370, y=532)
-        theme.round_button(self, "测试麦克风", self._voice_test, kind="normal").place(x=540, y=530)
+        theme.round_button(self.page1, "测试麦克风", self._voice_test, kind="normal").place(x=540, y=530)
 
         # -- 控制按钮（胶囊） --
-        theme.round_button(self, "保存配置", self._save, kind="normal").place(x=24, y=582)
-        theme.round_button(self, "试听 BGM", self._preview, kind="accent").place(x=140, y=582)
-        self.btn_start = theme.round_button(self, "启动检测", self._start, kind="accent")
+        theme.round_button(self.page1, "保存配置", self._save, kind="normal").place(x=24, y=582)
+        theme.round_button(self.page1, "试听 BGM", self._preview, kind="accent").place(x=140, y=582)
+        self.btn_start = theme.round_button(self.page1, "启动检测", self._start, kind="accent")
         self.btn_start.place(x=256, y=582)
-        self.btn_stop = theme.round_button(self, "停止检测", self._stop, kind="danger")
+        self.btn_stop = theme.round_button(self.page1, "停止检测", self._stop, kind="danger")
         self.btn_stop.place(x=372, y=582)
         self.btn_stop.config(state="disabled")
-        theme.round_button(self, "测试通关", self._test_victory, kind="normal").place(x=488, y=582)
-        theme.round_button(self, "测试玛薇卡", self._test_mavuika, kind="normal").place(x=604, y=582)
-        theme.round_button(self, "测试派蒙", self._test_paimon, kind="normal").place(x=720, y=582)
+        theme.round_button(self.page1, "测试通关", self._test_victory, kind="normal").place(x=488, y=582)
+        theme.round_button(self.page1, "测试玛薇卡", self._test_mavuika, kind="normal").place(x=604, y=582)
+        theme.round_button(self.page1, "测试派蒙", self._test_paimon, kind="normal").place(x=720, y=582)
 
         # -- 状态行 --
-        self.status_dot = tk.Label(self, text="●", bg=lab, fg=theme.ERR, bd=0, highlightthickness=0,
+        self.status_dot = tk.Label(self.page1, text="●", bg=lab, fg=theme.ERR, bd=0, highlightthickness=0,
                                    font=("Microsoft YaHei UI", 10))
         self.status_dot.place(x=26, y=628)
         self.var_status = tk.StringVar(value="状态：已停止")
-        tk.Label(self, textvariable=self.var_status, bg=lab, fg=theme.TEXT_DIM, bd=0, highlightthickness=0,
+        tk.Label(self.page1, textvariable=self.var_status, bg=lab, fg=theme.TEXT_DIM, bd=0, highlightthickness=0,
                  font=("Microsoft YaHei UI", 9)).place(x=42, y=628)
 
         # -- 运行日志 --
-        self.log_text = tk.Text(self, state="disabled", font=("Consolas", 9),
+        self.log_text = tk.Text(self.page1, state="disabled", font=("Consolas", 9),
                                 bg="#0a1424", fg="#cfe3ff", insertbackground="#cfe3ff",
                                 relief="flat", borderwidth=0, padx=10, pady=8)
         self.log_text.place(x=24, y=690, width=740, height=160)
-        scroll = ttk.Scrollbar(self, command=self.log_text.yview)
+        scroll = ttk.Scrollbar(self.page1, command=self.log_text.yview)
         scroll.place(x=768, y=690, height=160)
         self.log_text.config(yscrollcommand=scroll.set)
         theme.configure_log_tags(self.log_text)
 
-        self.log("控制台就绪。改完配置记得点「保存配置」；启动检测前请把游戏切成无边框窗口。")
+    # ------------------------------------------------------------ 第 2 页：特效检测
+    DET_ITEMS = [
+        ("detection", "奥黛塔", "元素爆发 → BGM + 灯光秀"),
+        ("mavuika", "玛薇卡", "元素爆发 → 《灼火之心》+ 火焰爆炸"),
+        ("columbina", "哥伦比娅", "元素爆发 → 《白鸽之诗》"),
+    ]
+    MON_ITEMS = [
+        ("completion", "通关庆祝", "幽境危战结算页 → 胜利特效 + 音效链"),
+        ("shop", "商城立绘", "创世结晶购买页 → 《朋友的酒》+ 许家空/许家萤"),
+        ("startup", "启动派蒙", "启动读条读满 → 派蒙迎接视频"),
+    ]
+
+    def _det_row(self, parent, y: int, key: str, name: str, desc: str, var):
+        """一行检测项：勾选框 + 名称 + 说明 + 实时状态。"""
+        lab = theme.BG
+        theme.round_check(parent, "", var,
+                          command=lambda k=key, v=var: self._toggle_detect(k, v)).place(x=30, y=y)
+        tk.Label(parent, text=name, bg=lab, fg=theme.TEXT, bd=0, highlightthickness=0,
+                 font=("Microsoft YaHei UI", 10, "bold")).place(x=62, y=y + 2)
+        tk.Label(parent, text=desc, bg=lab, fg=theme.TEXT_DIM, bd=0, highlightthickness=0,
+                 font=("Microsoft YaHei UI", 9)).place(x=160, y=y + 4)
+        st = tk.StringVar(value="—")
+        tk.Label(parent, textvariable=st, bg=lab, fg=theme.ICE, bd=0, highlightthickness=0,
+                 font=("Microsoft YaHei UI", 9)).place(x=660, y=y + 4)
+        self.var_det_state[key] = st
+        return st
+
+    def _build_page2(self):
+        lab = theme.BG
+
+        def title(x, y, text):
+            tk.Label(self.page2, text=text, bg=lab, fg=theme.ICE, bd=0, highlightthickness=0,
+                     font=("Microsoft YaHei UI", 10, "bold")).place(x=x, y=y)
+
+        def hint(x, y, text):
+            tk.Label(self.page2, text=text, bg=lab, fg=theme.TEXT_DIM, bd=0, highlightthickness=0,
+                     font=("Microsoft YaHei UI", 9)).place(x=x, y=y)
+
+        self.var_det_state = {}
+        self.var_det = {}
+
+        # -- 爆发检测 --
+        title(30, 70, "爆发检测（按 Q 触发，各角色独立）")
+        for i, (key, name, desc) in enumerate(self.DET_ITEMS):
+            var = tk.BooleanVar(value=bool(self.cfg.get(key, {}).get("enabled", key == "detection")))
+            self.var_det[key] = var
+            self._det_row(self.page2, 104 + i * 48, key, name, desc, var)
+        hint(30, 252, "关闭后该角色爆发不再触发 BGM/特效；勾选立即生效（检测运行中也可切换）")
+
+        # -- 场景监控 --
+        title(30, 354, "场景监控（持续检测，无需按 Q）")
+        for i, (key, name, desc) in enumerate(self.MON_ITEMS):
+            var = tk.BooleanVar(value=bool(self.cfg.get(key, {}).get("enabled", True)))
+            self.var_det[key] = var
+            self._det_row(self.page2, 388 + i * 48, key, name, desc, var)
+        hint(30, 528, "关闭后对应场景不再触发；商城/启动监控关闭可临时避免误触发")
+
+        # -- 灯光特效总开关 --
+        title(30, 588, "灯光特效总开关")
+        theme.round_check(self.page2, "灯光特效（探照灯 / 频谱 / 粒子 / 雪花 / GIF）",
+                          self.var_fx, command=self._toggle_fx).place(x=30, y=616)
+        hint(30, 656, "与「总控」页的灯光开关联动；关闭后所有特效进程不再启动")
+
+        # -- 操作按钮 --
+        theme.round_button(self.page2, "保存配置", self._save, kind="accent").place(x=30, y=748)
+        theme.round_button(self.page2, "测试通关", self._test_victory, kind="normal").place(x=150, y=748)
+        theme.round_button(self.page2, "测试玛薇卡", self._test_mavuika, kind="normal").place(x=266, y=748)
+        theme.round_button(self.page2, "测试派蒙", self._test_paimon, kind="normal").place(x=382, y=748)
+        hint(500, 756, "配置改动需点「保存配置」写入 config.json 持久化")
+
+    # ------------------------------------------------------------ 检测项启停
+    _DET_LABELS = {"detection": "奥黛塔", "mavuika": "玛薇卡", "columbina": "哥伦比娅",
+                   "completion": "通关庆祝", "shop": "商城立绘", "startup": "启动派蒙"}
+
+    def _toggle_detect(self, key: str, var):
+        """勾选/取消某检测项：运行中即时热切换，否则只改内存配置。"""
+        enabled = bool(var.get())
+        label = self._DET_LABELS.get(key, key)
+        t = self.trigger
+        if t is None:
+            self.cfg.setdefault(key, {})["enabled"] = enabled
+            self.log(f"[开关] {label}：{'开启' if enabled else '关闭'}（检测未运行，下次「启动检测」生效）")
+            return
+        try:
+            self.log(f"[开关] {t.set_detector_enabled(key, enabled)}")
+        except Exception as e:
+            self.log(f"[开关] {label} 切换失败: {e}")
+
+    def _toggle_fx(self):
+        """灯光特效总开关（与总控页联动）。"""
+        enabled = bool(self.var_fx.get())
+        self.cfg.setdefault("fx", {})["enabled"] = enabled
+        self.fx.enabled = enabled
+        if not enabled:
+            self.fx.stop()
+        self.log(f"[开关] 灯光特效{'开启' if enabled else '关闭'}")
 
     # ------------------------------------------------------------ voice
     def _current_mic_device(self):
@@ -562,6 +708,15 @@ class App(tk.Tk):
             self.status_dot.config(foreground=theme.OK)
         else:
             self.status_dot.config(foreground=theme.ERR)
+        # 第 2 页：各检测项实时状态
+        for key, st in getattr(self, "var_det_state", {}).items():
+            if t is None:
+                st.set("未运行检测")
+            else:
+                try:
+                    st.set(t.detector_state(key))
+                except Exception:
+                    st.set("—")
         # 语音状态
         if self.voice.listening:
             heard = f" | 最近: {self.voice.last_heard}" if self.voice.last_heard else ""

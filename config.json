@@ -13,6 +13,7 @@
   "target_slot": 2,
   "use_slot_check": false,
   "detection": {
+    "enabled": true,
     "mode": "recognition",
     "reference": [
       "assets/burst_ref_face.png",
