@@ -255,17 +255,22 @@ def round_button(master, text: str, command, kind: str = "normal"):
     def make(frac: float):
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
+        # frac 生效：1.0=常态 / >1 悬停更亮 / <1 按下更暗
+        top2 = tuple(min(255, int(c * frac)) for c in top)
+        bot2 = tuple(min(255, int(c * frac)) for c in bot)
+        border2 = tuple(min(255, int(c * frac)) for c in border)
         # 垂直渐变
         for y in range(h):
             t = y / h
-            col = tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3))
+            col = tuple(int(top2[i] + (bot2[i] - top2[i]) * t) for i in range(3))
             d.line([(0, y), (w, y)], fill=(*col, 255))
         mask = Image.new("L", (w, h), 0)
         ImageDraw.Draw(mask).rounded_rectangle([1, 1, w - 2, h - 2], radius=h // 2, fill=255)
-        # 底部微光（让胶囊有立体感）
+        # 底部微光（让胶囊有立体感）；按下态弱化发光
         glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ga = int(255 * max(0.5, min(1.0, frac)))
         ImageDraw.Draw(glow).rounded_rectangle([1, 1, w - 2, h - 2], radius=h // 2,
-                                               fill=(*border, 255))
+                                               fill=(*border2, ga))
         glow = glow.filter(ImageFilter.GaussianBlur(3))
         img = Image.alpha_composite(img, glow)
         img.putalpha(mask)
@@ -307,6 +312,7 @@ class RoundSlider(tk.Canvas):
         self.bind("<Button-1>", self._press)
         self.bind("<B1-Motion>", self._move)
         self.bind("<ButtonRelease-1>", self._release)
+        self.bind("<Configure>", lambda e: self._draw())  # 窗口缩放后重算旋钮位置
         self.var.trace_add("write", lambda *a: self._draw())
         self._draw()
 
