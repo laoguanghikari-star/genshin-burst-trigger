@@ -755,7 +755,7 @@ class BurstTrigger:
                 except Exception as e:
                     self._log(f"[哥伦比娅] BGM 加载失败: {e}")
             # 商城 BGM（进入创世结晶购买页循环播放，离开淡出停止）
-            if self.shop.enabled and self.shop.recognizer is not None:
+            if self.shop.enabled and self.shop.ready:
                 try:
                     sp = self.cfg.get("shop", {})
                     audio = Path(sp.get("audio_file", "assets/shop_bgm.mp3"))
