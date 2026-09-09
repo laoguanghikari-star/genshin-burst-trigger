@@ -1,17 +1,21 @@
 """
-原神 · 元素爆发音效触发原型 v1.5
+原神 · 元素爆发音效触发助手 v2.0
 ================================
-检测逻辑（三重信号确认）:
-  1. 键盘钩子捕获 Q 键按下（爆发快捷键）
-  2. 出战角色校验：队伍面板右侧数字角标——出战角色的角标是半透明灰色，
-     非出战是纯白。只有当前出战角色 == target_slot（默认 2 = 奥黛塔）才武装触发
-  3. 按下后短暂时间窗内，屏幕中心亮度突增（爆发施放闪光）
-  BGM 播放期间屏蔽一切新触发（防止"禁忌三重奏"叠音）
+检测逻辑（识别通道为主）:
+  1. 键盘钩子捕获 Q 键按下（爆发快捷键，pynput）
+  2. 按下后 2.5s 窗口内，对每帧计算「与目标角色爆发演示画面的相似度」
+     （BurstRecognizer：冰蓝占比 + HSV 直方图相关 + 身体模板匹配 − 条件负样本扣分），
+     连续 match_frames 帧超阈值即触发；Q 按下瞬间的场景统计作为自适应基准，
+     冰蓝/直方图改为相对增量，消除蓝色场景天然抬分。
+  3. 三个角色（奥黛塔 / 玛薇卡 / 哥伦比娅）各有独立参考图与负样本；
+     另有持续监控：通关页（CompletionMonitor）、商城氪金页（ShopMonitor，三重信号）、
+     启动读条（StartupMonitor，四重数值条件）。
+  BGM 播放期间屏蔽一切新触发（防止「禁忌三重奏」叠音）。
 
 使用:
   python main.py            # 正常运行
   python main.py --test     # 只测试音频播放（不启动检测）
-  python main.py --debug    # 控制台输出每帧亮度与出战槽位，便于调参
+  python main.py --debug    # 控制台输出每帧评分与判定过程
 """
 from __future__ import annotations
 
@@ -60,6 +64,15 @@ class BgmPlayer:
 
     def play(self, loops: int = 0) -> None:
         self.channel = self.sound.play(loops=loops)
+
+    def stop(self, fade_ms: int = 0) -> None:
+        """停止播放；fade_ms > 0 时淡出。"""
+        if self.channel is None:
+            return
+        if fade_ms > 0:
+            self.channel.fadeout(fade_ms)
+        else:
+            self.channel.stop()
 
     def is_playing(self) -> bool:
         return bool(self.channel is not None and self.channel.get_busy())
@@ -149,7 +162,7 @@ class BurstRecognizer:
         self.match_frames = int(d.get("match_frames", 2))
         self.template_roi = d.get("template_roi")  # [x,y,w,h] 正参考裁剪
         self.negative_roi = d.get("negative_roi") or self.template_roi  # 负样本裁剪
-        self.neg_penalty = float(d.get("neg_penalty", 0.75))
+        self.neg_penalty = float(d.get("neg_penalty", 1.0))
         refs = d.get("reference", "assets/burst_ref.png")
         if isinstance(refs, str):
             refs = [refs]
@@ -429,9 +442,9 @@ class StartupMonitor:
         self.check_interval = float(s.get("check_interval", 0.5))
         self.icon_roi = s.get("icon_roi", [900, 660, 850, 130])  # x, y, w, h
         self.white_ratio = float(s.get("white_ratio", 0.9))
-        self.trigger_ratio = float(s.get("trigger_ratio", 0.11))
-        self.release_ratio = float(s.get("release_ratio", 0.06))
-        self.min_clusters = int(s.get("min_clusters", 5))
+        self.trigger_ratio = float(s.get("trigger_ratio", 0.035))
+        self.release_ratio = float(s.get("release_ratio", 0.02))
+        self.min_clusters = int(s.get("min_clusters", 2))
         self.margin_white = float(s.get("margin_white", 0.995))
         self.match_frames = int(s.get("match_frames", 2))
         self.cooldown = float(s.get("cooldown_seconds", 60.0))
@@ -578,6 +591,7 @@ class BurstTrigger:
         # GUI 轮询用（只读状态）
         self.last_lum: float | None = None
         self.last_slot: int | None = None
+        self.last_score: float = 0.0  # 奥黛塔最近一次识别评分
 
     # -- 键盘钩子回调（pynput 线程）--
     def _on_press(self, key) -> None:
@@ -752,21 +766,23 @@ class BurstTrigger:
                                 self.fx.stop()
                             self._fx_until = time.monotonic()
 
-                    # 启动加载屏「元素读条读满」监控 → 派蒙迎接视频（播放一次）
-                    if now >= self._fx_until and self.startup.update(frame, now):
-                        sp = self.cfg.get("startup", {})
-                        dur = float(sp.get("paimon_duration", 10.0))
-                        fx_cfg = self.cfg.get("fx", {})
-                        if (self.fx is not None and fx_cfg.get("enabled", True)
-                                and fx_cfg.get("paimon_frames")):
-                            try:
-                                self.fx.start_paimon(dur)
-                                self._fx_until = time.monotonic() + dur + 2.0
-                                self._log(f"[启动] 元素读条读满！派蒙迎接视频播放（{dur:.1f}s，一次）")
-                            except Exception as e:
-                                self._log(f"[启动] 派蒙视频启动失败: {e}")
-                        else:
-                            self._log("[启动] 元素读条读满（派蒙帧未加载，跳过视频）")
+                # 启动加载屏「元素读条读满」监控 → 派蒙迎接视频（播放一次）
+                # 独立于 Q 确认窗口：读条只会读满一次，漏检无法补救；
+                # 且该监控 check_interval=0.3、纯数值条件，算力极低不抢帧。
+                if now >= self._fx_until and self.startup.update(frame, now):
+                    sp = self.cfg.get("startup", {})
+                    dur = float(sp.get("paimon_duration", 10.0))
+                    fx_cfg = self.cfg.get("fx", {})
+                    if (self.fx is not None and fx_cfg.get("enabled", True)
+                            and fx_cfg.get("paimon_frames")):
+                        try:
+                            self.fx.start_paimon(dur)
+                            self._fx_until = time.monotonic() + dur + 2.0
+                            self._log(f"[启动] 元素读条读满！派蒙迎接视频播放（{dur:.1f}s，一次）")
+                        except Exception as e:
+                            self._log(f"[启动] 派蒙视频启动失败: {e}")
+                    else:
+                        self._log("[启动] 元素读条读满（派蒙帧未加载，跳过视频）")
 
                 # Q 按下 → （可选出战校验）→ 武装确认
                 if self._q_pressed_at is not None and now - self._q_pressed_at > 0.05:
@@ -840,7 +856,7 @@ class BurstTrigger:
                         if abs(delta) > self.threshold:
                             fired = True
                     # 识别通道（奥黛塔爆发演示画面比对）
-                    if self.det_mode in ("recognition", "both") and not fired:
+                    if self.det_mode in ("recognition", "both") and not fired and self.recognizer is not None:
                         if shared is None:
                             shared = self.recognizer._prepare(frame)
                         score = self.recognizer.check(frame, shared, baseline=self._baseline)
