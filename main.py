@@ -175,6 +175,7 @@ class BurstRecognizer:
         self.ref_path = refs[0] if refs else ""
         ref_rois = d.get("reference_rois")  # 可选：与 reference 一一对应的 [x,y,w,h]
         self._refs: list = []  # [(直方图, ⅛ 模板, 搜索原点或 None), ...]
+        self.last_detail: list = []  # 最近一次 check 的逐参考图诊断（debug 用）
         for i, ref_name in enumerate(refs):
             ref = Path(ref_name)
             if not ref.is_absolute():
@@ -272,8 +273,14 @@ class BurstRecognizer:
         ±64px 后 0.24~0.46 → 0.00~0.35，真阳性仍 1.000），又把搜索位置数
         从 14089 降到 ~3729（4.3 倍加速）。
         """
+        return self._match_detail(gi, tpl, origin)[0]
+
+    def _match_detail(self, gi, tpl, origin=None):
+        """返回 (归一化相关最大值, 峰值在原图的 (x,y) 坐标)——供 debug 诊断。"""
         if origin is None or self.search_pad <= 0:
-            return max(0.0, float(cv2.matchTemplate(gi, tpl, cv2.TM_CCOEFF_NORMED).max()))
+            res = cv2.matchTemplate(gi, tpl, cv2.TM_CCOEFF_NORMED)
+            _, mx, _, ml = cv2.minMaxLoc(res)
+            return max(0.0, float(mx)), (ml[0] * 8, ml[1] * 8)
         ox, oy = origin[0] // 8, origin[1] // 8
         pad = self.search_pad // 8
         h, w = tpl.shape
@@ -282,8 +289,10 @@ class BurstRecognizer:
         y1 = min(gi.shape[0], oy + h + pad)
         region = gi[y0:y1, x0:x1]
         if region.shape[0] < h or region.shape[1] < w:
-            return 0.0
-        return max(0.0, float(cv2.matchTemplate(region, tpl, cv2.TM_CCOEFF_NORMED).max()))
+            return 0.0, (0, 0)
+        res = cv2.matchTemplate(region, tpl, cv2.TM_CCOEFF_NORMED)
+        _, mx, _, ml = cv2.minMaxLoc(res)
+        return max(0.0, float(mx)), ((x0 + ml[0]) * 8, (y0 + ml[1]) * 8)
 
     @staticmethod
     def _prepare(frame):
@@ -309,16 +318,20 @@ class BurstRecognizer:
         ice = self._ice(small)
         fhist = self._hist(small)
         scores = []  # [(pos, 该参考图的基础分)]
+        detail = []  # 逐参考图诊断：[(idx, pos, 基础分, 峰值坐标)]
         for idx, (hist, tpl, origin) in enumerate(self._refs):
             corr = max(0.0, cv2.compareHist(hist, fhist, cv2.HISTCMP_CORREL))
-            pos = self._match(gi, tpl, origin)
+            pos, loc = self._match_detail(gi, tpl, origin)
             if baseline is not None:
                 ice0, corr0 = baseline
                 ice_t = max(0.0, ice - ice0)
                 corr_t = max(0.0, corr - (corr0[idx] if idx < len(corr0) else 0.0))
             else:
                 ice_t, corr_t = ice, corr
-            scores.append((pos, 0.25 * ice_t + 0.20 * corr_t + 0.55 * pos))
+            base = 0.25 * ice_t + 0.20 * corr_t + 0.55 * pos
+            scores.append((pos, base))
+            detail.append((idx, pos, base, loc))
+        self.last_detail = detail
         if not scores:
             return 0.0
         if self.neg_ready:
@@ -689,6 +702,16 @@ class BurstTrigger:
         label = self._MON_LABELS.get(key, key)
         return f"{label}监控已{'启用' if enabled else '停用'}"
 
+    @staticmethod
+    def _fmt_detail(rec) -> str:
+        """逐参考图诊断串：r0:0.42@(640,408) r1:0.28@(768,288)（debug 日志用）。"""
+        try:
+            return " ".join(
+                f"r{i}:{p:.2f}@{xy[0]},{xy[1]}" for i, p, _b, xy in rec.last_detail
+            )
+        except Exception:
+            return ""
+
     def detector_state(self, key: str) -> str:
         """当前运行状态（供 GUI 显示）。"""
         if key in ("detection", "mavuika", "columbina"):
@@ -987,7 +1010,7 @@ class BurstTrigger:
                         else:
                             self._recog_hits = 0
                         if self.debug:
-                            self._log(f"[识别] score={score:+.3f} hits={self._recog_hits}/{self.recognizer.match_frames}")
+                            self._log(f"[识别] score={score:+.3f} hits={self._recog_hits}/{self.recognizer.match_frames} | {self._fmt_detail(self.recognizer)}")
                         if self._recog_hits >= self.recognizer.match_frames:
                             fired = True
                             fired_kind = "odette"
@@ -1002,7 +1025,7 @@ class BurstTrigger:
                         else:
                             self._mav_hits = 0
                         if self.debug:
-                            self._log(f"[玛薇卡] score={mscore:+.3f} hits={self._mav_hits}/{self.mavuika_rec.match_frames}")
+                            self._log(f"[玛薇卡] score={mscore:+.3f} hits={self._mav_hits}/{self.mavuika_rec.match_frames} | {self._fmt_detail(self.mavuika_rec)}")
                         if self._mav_hits >= self.mavuika_rec.match_frames:
                             fired = True
                             fired_kind = "mavuika"
@@ -1017,7 +1040,7 @@ class BurstTrigger:
                         else:
                             self._col_hits = 0
                         if self.debug:
-                            self._log(f"[哥伦比娅] score={cscore:+.3f} hits={self._col_hits}/{self.columbina_rec.match_frames}")
+                            self._log(f"[哥伦比娅] score={cscore:+.3f} hits={self._col_hits}/{self.columbina_rec.match_frames} | {self._fmt_detail(self.columbina_rec)}")
                         if self._col_hits >= self.columbina_rec.match_frames:
                             fired = True
                             fired_kind = "columbina"
