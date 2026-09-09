@@ -8,3 +8,6 @@ Pillow>=10
 vosk>=0.3
 sounddevice>=0.4
 pywin32>=306
+
+# 打包 exe（build_exe.ps1 需要，仅开发/发布时安装）
+pyinstaller>=6

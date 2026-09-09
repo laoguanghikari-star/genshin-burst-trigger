@@ -81,20 +81,32 @@ class VoiceController:
         if not self.enabled:
             self.log("语音功能未启用（config voice.enabled=false）")
             return
+        # 上一轮线程若还在退出中，先等它真正结束，避免打开第二条音频流
+        t = self._thread
+        if t is not None and t.is_alive():
+            t.join(timeout=3)
+            if t.is_alive():
+                self.log("语音线程尚未退出，稍后再试")
+                return
         try:
             self._model = vosk.Model(str(self.model_path))
         except Exception as e:
             self.log(f"语音模型加载失败: {e}")
             return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        # 每轮使用独立的 Event：避免 start 时 clear() 掉旧线程的退出信号
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(self._stop,), daemon=True)
         self._thread.start()
 
     def stop(self):
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=2)
+        t = self._thread
+        if t is not None and t.is_alive():
+            t.join(timeout=3)
+        if t is None or not t.is_alive():
             self._thread = None
+        else:
+            self.log("语音线程仍在退出中（麦克风流关闭较慢）")
         self.log("语音聆听已停止")
 
     @property
@@ -102,7 +114,7 @@ class VoiceController:
         return bool(self._thread and self._thread.is_alive())
 
     # ------------------------------------------------------------ 识别循环
-    def _run(self):
+    def _run(self, stop_event: threading.Event):
         keywords = list(self.commands.keys())
         if self.wake_enabled:
             # 唤醒词进关键词表：连续版 + 词根（vosk 可能输出「派蒙派蒙」或「派蒙 派蒙」）
@@ -127,7 +139,7 @@ class VoiceController:
                     self.log(f"语音聆听中…（先喊「{self.wake_word}」唤醒，再说指令）")
                 else:
                     self.log("语音聆听中…（模型就绪，说「原神 启动」试试）")
-                while not self._stop.is_set():
+                while not stop_event.is_set():
                     try:
                         data = q.get(timeout=0.5)
                     except queue.Empty:

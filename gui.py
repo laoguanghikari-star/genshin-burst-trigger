@@ -273,8 +273,10 @@ class App(tk.Tk):
             self._run_voice_action(action)
 
     def _run_voice_action(self, action: str):
-        # 主线程执行语音动作
-        if action == "launch_game":
+        # 主线程执行语音动作 / UI 事件
+        if action == "worker_done":
+            self._on_worker_done()
+        elif action == "launch_game":
             self._voice_launch_game()
         elif action == "quit_game":
             self._voice_quit_game()
@@ -533,7 +535,8 @@ class App(tk.Tk):
         except Exception as e:
             self.log(f"[错误] {e}")
         finally:
-            self.after(0, self._on_worker_done)
+            # 不跨线程调 tkinter：入队，由主线程 _poll_status 取出执行
+            self._cmd_queue.put("worker_done")
 
     def _on_worker_done(self):
         self.trigger = None

@@ -56,8 +56,10 @@ class FxClient:
             try:
                 self.proc.stdin.write((line + "\n").encode("utf-8"))
                 self.proc.stdin.flush()
-            except Exception:
-                pass
+            except Exception as e:
+                # 管道已死（特效进程崩溃）——不能静默，否则表现为「特效不出现也没报错」
+                print(f"[fx_client] 命令发送失败 ({line!r}): {e}", flush=True)
+                self.proc = None
 
     def start(self, duration: float):
         if self._ensure():
@@ -101,6 +103,7 @@ class FxClient:
             except Exception:
                 try:
                     self.proc.kill()
+                    self.proc.wait(timeout=2)  # 回收进程句柄，避免僵尸残留
                 except Exception:
                     pass
             self.proc = None

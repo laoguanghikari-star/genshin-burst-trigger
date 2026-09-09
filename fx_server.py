@@ -109,8 +109,38 @@ class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
-user32 = ctypes.windll.user32
-gdi32 = ctypes.windll.gdi32
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+
+# 显式声明签名：64 位下句柄必须用 c_void_p 系列，否则默认 c_int 会截断句柄
+user32.GetParent.argtypes = [wt.HWND]
+user32.GetParent.restype = wt.HWND
+user32.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+user32.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
+user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+user32.SetWindowPos.restype = wt.BOOL
+user32.GetDC.argtypes = [wt.HWND]
+user32.GetDC.restype = wt.HDC
+user32.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
+user32.ReleaseDC.restype = ctypes.c_int
+user32.UpdateLayeredWindow.argtypes = [wt.HWND, wt.HDC, ctypes.POINTER(POINT),
+                                       ctypes.POINTER(SIZE), wt.HDC, ctypes.POINTER(POINT),
+                                       wt.DWORD, ctypes.POINTER(BLENDFUNCTION), wt.DWORD]
+user32.UpdateLayeredWindow.restype = wt.BOOL
+user32.GetForegroundWindow.argtypes = []
+user32.GetForegroundWindow.restype = wt.HWND
+user32.SetForegroundWindow.argtypes = [wt.HWND]
+user32.SetForegroundWindow.restype = wt.BOOL
+gdi32.CreateCompatibleDC.argtypes = [wt.HDC]
+gdi32.CreateCompatibleDC.restype = wt.HDC
+gdi32.CreateDIBSection.argtypes = [wt.HDC, ctypes.POINTER(BITMAPINFO), wt.UINT,
+                                   ctypes.POINTER(ctypes.c_void_p), wt.HANDLE, wt.DWORD]
+gdi32.CreateDIBSection.restype = wt.HBITMAP
+gdi32.SelectObject.argtypes = [wt.HDC, wt.HGDIOBJ]
+gdi32.SelectObject.restype = wt.HGDIOBJ
 
 
 class LaserApp:
@@ -209,11 +239,11 @@ class LaserApp:
         注意：不能加 WS_EX_NOACTIVATE / WS_EX_TOOLWINDOW，也不能给子窗口设
         WS_EX_LAYERED —— 实测这些都会导致 ULW 内容不合成（黑窗/不可见）。"""
         GWL_EXSTYLE = -20
-        style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
-        user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
+        style = user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
         # 强制置顶（手动设位 + 提升 z 序）
-        user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE,
-                              user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE) | 0x8)  # WS_EX_TOPMOST
+        user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE,
+                                 user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) | 0x8)  # WS_EX_TOPMOST
         user32.SetWindowPos(self.hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0,
                             0x0001 | 0x0002 | 0x0010)
 
@@ -250,6 +280,10 @@ class LaserApp:
             line = line.strip()
             if line:
                 self.cmd_queue.append(line)
+        # stdin EOF（父进程退出/管道断开）→ 当 quit 处理，
+        # 否则透明叠加窗口会永久残留在最顶层
+        self._log("stdin 已关闭，自动退出")
+        self.cmd_queue.append("quit")
 
     def _tick_cmds(self):
         while self.cmd_queue:
@@ -686,7 +720,10 @@ class LaserApp:
                         self._log(f"帧统计: alpha>0 占比 {(a > 0).mean() * 100:.0f}%, 最大 alpha {a.max()}")
                 time.sleep(0.016)
         except Exception as e:
+            # 渲染线程崩溃后若不退出，叠加层会冻结在最后一帧且无人察觉
             self._log(f"渲染线程异常: {e}")
+            self.running = False
+            self.quit_event.set()
 
     def _tick_frame(self):
         """主线程（窗口属主）执行 ULW present。"""
@@ -702,7 +739,8 @@ class LaserApp:
         # 派蒙模式用专属不透明度增益抵消全局灯光强度（默认 0.87），
         # 让派蒙本体实心不透明；其他特效维持原样
         k = self.intensity * (self._paimon_gain if self.mode == "paimon" else 1.0)
-        a = cv2.multiply(alpha, np.array([k])) if k < 1.0 else alpha
+        # k > 1.0 也要生效（paimon 增益 1.15 用于抵消全局强度），cv2.multiply 对 uint8 自动饱和
+        a = cv2.multiply(alpha, np.array([k])) if k != 1.0 else alpha
         a = cv2.GaussianBlur(a, (0, 0), 2.5)
         af = a.astype(np.float32) / 255.0
         out = np.zeros((RH, RW, 4), np.float32)
