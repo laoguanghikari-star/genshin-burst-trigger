@@ -48,7 +48,7 @@ def analyze(name):
     print(f"  ice={ice:.3f}  hl={ShopMonitor._mean_gray(frame, SHOP['highlight_roi']):.1f}"
           f"  dk={ShopMonitor._mean_gray(frame, SHOP['dark_roi']):.1f}"
           f"  (need hl>={SHOP['highlight_min']}, dk<={SHOP['dark_max']})")
-    for idx, (hist, tpl) in enumerate(rec._refs):
+    for idx, (hist, tpl, _o) in enumerate(rec._refs):
         corr = max(0.0, cv2.compareHist(hist, fhist, cv2.HISTCMP_CORREL))
         res = cv2.matchTemplate(gi, tpl, cv2.TM_CCOEFF_NORMED)
         pos = float(res.max())

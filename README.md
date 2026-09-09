@@ -28,12 +28,16 @@ score = 0.25×冰蓝占比 + 0.20×HSV直方图相关 + 0.55×姿态模板匹配
 ```
 
 - **多参考图**：每角色支持多张参考图（列表），分别评分取最大——覆盖爆发演示的不同阶段（如玛薇卡跃起/骑行、哥伦比娅面部特写/天使形态）
-- **负样本系统**：七七/桑多涅/茜特菈莉/其他角色爆发/队伍配置页等画面加入负样本，只有帧比正参考更"像"负样本时才扣分（条件扣分），精准压制误触
-- **场景自适应基准**：Q 按下瞬间采集场景的冰蓝占比与直方图相关度，`ice/hist` 改为相对增量——**海边、天云峠等大范围蓝色场景**不再抬高分数（实测蓝色场景基准下玛薇卡帧归零，奥黛塔自身 0.647 仍触发）
-- **低延迟优化**：模板匹配在 ⅛ 尺度进行，三角色识别器合计约 **53ms/帧**（原机实测：`python tools/bench.py` → `output/bench_result.txt`，中位 53.3ms，⅛ 与 ¼ 分数最大偏差 0.0030）；确认窗口期间自动暂停通关/商城监控，爆发采样不被抢帧（启动读条监控独立于此门，避免漏检）
-- 实测交叉验证（阈值：奥黛塔 0.55、玛薇卡/哥伦比娅 0.5；连续 2 帧）：
-  - 奥黛塔 0.894 触发；玛薇卡 0.813/0.867 触发；哥伦比娅 0.71~0.85 触发（01 帧即触发）
-  - 各角色互不误触（≤0.40），队伍配置页 0.117~0.402 安全
+- **搜索区域约束**（`search_pad`，默认 64px）：模板匹配不再全帧滑窗，只在「该参考图在画面上的典型位置 ±pad」内搜索（`reference_rois` 可为每张参考图单独指定原点）
+  - 实测玛薇卡：真阳性峰值钉在 (768,288)，干扰画面峰值散落各处 → 限定 ±64px 后真阳性仍 **1.000**、干扰从 0.24~0.46 降到 **0.00~0.35**
+  - 附带收益：搜索位置 14,089 → 3,729，单次匹配 1.08ms → **0.25ms**
+- **负样本系统**：七七/桑多涅/茜特菈莉/其他角色爆发/队伍配置页等画面加入负样本，**无条件计算**并只在「负样本匹配超过正样本」时扣分
+  - ⚠️ 早期版本只在 `pos > 0.40` 时才计算负样本 → 「整体像但模板匹配中等」的画面（七七 pos=0.382 + 高 ice = 0.479）完全绕过负样本，是玛薇卡误触的根因之一，已修复
+- **场景自适应基准**：Q 按下瞬间采集场景的冰蓝占比与直方图相关度，`ice/hist` 改为相对增量——**海边、天云峠等大范围蓝色场景**不再抬高分数。三角色**全部**接入（玛薇卡早期缺失，冰蓝场景白送 0.17~0.23 分，已补齐）
+- **低延迟优化**：模板匹配在 ⅛ 尺度 + 区域约束，三角色识别器合计约 **16ms/帧**（原机实测：`python tools/bench.py` / `tools/verify_search_pad.py`，中位 16.1ms；⅛ 与 ¼ 分数最大偏差 0.0030）；确认窗口期间自动暂停通关/商城监控，爆发采样不被抢帧（启动读条监控独立于此门，避免漏检）
+- 实测交叉验证（阈值：奥黛塔 0.55、玛薇卡/哥伦比娅 0.5；连续 2 帧；70 张 2K 截图全量回归）：
+  - 真阳性：奥黛塔 0.894/0.777；玛薇卡 0.830/0.871；哥伦比娅 0.708~0.850
+  - **跨角色误触全部归零**：奥黛塔画面给玛薇卡/哥伦比娅 0.000；玛薇卡画面给奥黛塔 0.000；全部干扰画面 ≤0.488
 
 ## 🛒 商城 BGM + 立绘特效（shop）
 
@@ -139,10 +143,10 @@ python fx_server.py --demo paimon:10 # 特效演示：派蒙视频 10 秒
 | 块 | 字段 | 含义 | 默认 |
 |---|---|---|---|
 | 全局 | hotkey / cooldown_seconds / capture_fps / volume | 触发键 / 冷却 / 抓帧率 / 音量 | q / 20 / 30 / 0.5 |
-| detection | enabled / reference / template_roi / match_threshold / match_frames / window_seconds | 奥黛塔爆发检测开关 / 参考图（前期特写帧，更早触发）/ 模板区域 / 阈值 / 连续帧 / 窗口 | true / burst_ref_face.png / [768,288,1024,864] / 0.55 / 2 / 2.5 |
-| detection | negative_templates / neg_penalty | 负样本列表 / 扣分强度 | 七七/桑多涅/玛薇卡/茜特菈莉/哥伦比娅/队伍配置页 / 1.0 |
-| mavuika | reference / match_threshold / audio_file / volume / fx_duration | 玛薇卡参考图(2张) / 阈值 / BGM / 音量 / 火焰特效时长 | 0.5 / mavuika_bgm.wav / 0.7 / 3.0 |
-| columbina | reference / match_threshold / audio_file / fx_duration | 哥伦比娅参考图(6张) / 阈值 / BGM / 特效时长(待定) | 0.5 / columbina_bgm.wav / 4.0 |
+| detection | enabled / reference / reference_rois / search_pad / template_roi / match_threshold / match_frames / window_seconds | 奥黛塔爆发检测开关 / 参考图 / 每张参考图的搜索原点 / 搜索容错像素 / 模板区域 / 阈值 / 连续帧 / 窗口 | true / 2 张 / [[640,408],[768,288]] / 64 / [768,288,1024,864] / 0.55 / 2 / 2.5 |
+| detection | negative_templates / neg_penalty | 负样本列表 / 扣分强度（无条件计算） | 七七/桑多涅/玛薇卡/茜特菈莉/哥伦比娅/队伍配置页 / 1.0 |
+| mavuika | reference / search_pad / match_threshold / audio_file / volume / fx_duration | 玛薇卡参考图(2张) / 搜索容错 / 阈值 / BGM / 音量 / 火焰特效时长 | 0.5 / mavuika_bgm.wav / 0.7 / 3.0 |
+| columbina | reference / search_pad / match_threshold / audio_file / fx_duration | 哥伦比娅参考图(6张) / 搜索容错 / 阈值 / BGM / 特效时长(待定) | 0.5 / columbina_bgm.wav / 4.0 |
 | completion | enabled / reference / match_threshold / sound_file / bgm_file / fx_duration / bgm_fade_delay_seconds | 通关庆祝配置 | 0.45 / unbelievable.wav / victory_bgm.wav / 14 / 0 |
 | shop | enabled / tab_reference / tab_roi / tab_threshold / notice_reference / notice_roi / notice_threshold / roi_pad / match_frames / check_interval / stop_misses / audio_file / fade_seconds | 商城氪金页监控（双 ROI 苛刻匹配：凝取结晶高亮行 + 防沉迷提示语） | true / 2 张 / [60,640,300,120] / 0.80 / 2 张 / [44,76,290,38] / 0.80 / 8 / 2 / 0.5s / 6 次 / shop_bgm.mp3 / 1.5s |
 | startup | enabled / icon_roi / trigger_ratio / release_ratio / min_clusters / margin_white / check_interval / paimon_duration | 启动读条监控（触发时机） | [900,660,850,130] / 0.035 / 0.02 / 2 / 0.995 / 0.3s / 10.0 |

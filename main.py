@@ -163,12 +163,19 @@ class BurstRecognizer:
         self.template_roi = d.get("template_roi")  # [x,y,w,h] 正参考裁剪
         self.negative_roi = d.get("negative_roi") or self.template_roi  # 负样本裁剪
         self.neg_penalty = float(d.get("neg_penalty", 1.0))
+        # 模板匹配的搜索区域约束：以 template_roi 的 (x,y) 作为模板在画面上的
+        # 典型位置，只在该位置 ±search_pad（原图像素）内滑窗。0 = 全帧搜索。
+        # 实测（玛薇卡）：真阳性峰值钉在 (768,288) 而干扰画面峰值散落各处，
+        # 限定 ±64px 后真阳性仍 1.000、干扰从 0.24~0.46 降到 0.00~0.35，
+        # 匹配耗时同时降 4.3 倍。
+        self.search_pad = int(d.get("search_pad", 0))
         refs = d.get("reference", "assets/burst_ref.png")
         if isinstance(refs, str):
             refs = [refs]
         self.ref_path = refs[0] if refs else ""
-        self._refs: list = []  # [(直方图, ¼ 模板), ...]
-        for ref_name in refs:
+        ref_rois = d.get("reference_rois")  # 可选：与 reference 一一对应的 [x,y,w,h]
+        self._refs: list = []  # [(直方图, ⅛ 模板, 搜索原点或 None), ...]
+        for i, ref_name in enumerate(refs):
             ref = Path(ref_name)
             if not ref.is_absolute():
                 ref = BASE / ref
@@ -179,9 +186,22 @@ class BurstRecognizer:
                     if tpl is not None:
                         # 直方图与帧同尺度（¼ 小图）计算，保证可比且省算力
                         small = cv2.resize(img, (img.shape[1] // 4, img.shape[0] // 4))
-                        self._refs.append((self._hist(small), self._shrink(tpl)))
-        # 负样本模板（¼ 缩放，裁剪用 negative_roi）
-        self._neg_tpls: list = []  # (名称, ¼ 模板)
+                        # 每张参考图可有独立搜索原点（多参考图位置不同，例如奥黛塔
+                        # 的面部特写 vs 全身晚段帧）；未配置则回退 template_roi 起点
+                        origin = None
+                        if self.search_pad > 0:
+                            roi_i = ref_rois[i] if (ref_rois and i < len(ref_rois)) else None
+                            if roi_i:
+                                origin = (int(roi_i[0]), int(roi_i[1]))
+                            elif self.template_roi:
+                                origin = (int(self.template_roi[0]), int(self.template_roi[1]))
+                        self._refs.append((self._hist(small), self._shrink(tpl), origin))
+        # 负样本模板（裁剪用 negative_roi；搜索原点取 negative_roi 起点，
+        # 这样负样本与正样本在【同一区域】内比较，扣分才有意义）
+        neg_origin = None
+        if self.search_pad > 0 and self.negative_roi:
+            neg_origin = (int(self.negative_roi[0]), int(self.negative_roi[1]))
+        self._neg_tpls: list = []  # (名称, ⅛ 模板, 搜索原点)
         for neg_name in d.get("negative_templates", []):
             p = Path(neg_name)
             if not p.is_absolute():
@@ -191,7 +211,7 @@ class BurstRecognizer:
                 if ng is not None:
                     tpl = self._crop_gray(ng, self.negative_roi)
                     if tpl is not None:
-                        self._neg_tpls.append((p.stem, self._shrink(tpl)))
+                        self._neg_tpls.append((p.stem, self._shrink(tpl), neg_origin))
 
     @staticmethod
     def _imread(path) -> np.ndarray | None:
@@ -242,11 +262,28 @@ class BurstRecognizer:
         mask = (b > r * 1.2) & (b > g * 1.05) & (v > 160) & (s > 40)
         return float(mask.mean())
 
-    def _match(self, gi, tpl) -> float:
+    def _match(self, gi, tpl, origin=None) -> float:
         """⅛ 灰度帧上的模板匹配（模板已预缩放）。⅛ 尺度与 ¼ 分数几乎一致
         （实测偏差 <0.01），但快约 4 倍——三角色识别器合计量从 ~200ms/帧
-        降到 ~53ms/帧，显著降低触发延迟。"""
-        return max(0.0, float(cv2.matchTemplate(gi, tpl, cv2.TM_CCOEFF_NORMED).max()))
+        降到 ~53ms/帧，显著降低触发延迟。
+
+        origin 非空（且 search_pad > 0）时，只在 origin ±search_pad 内滑窗：
+        既挡住画面别处的偶然命中（实测玛薇卡：干扰画面峰值散落各处，限定
+        ±64px 后 0.24~0.46 → 0.00~0.35，真阳性仍 1.000），又把搜索位置数
+        从 14089 降到 ~3729（4.3 倍加速）。
+        """
+        if origin is None or self.search_pad <= 0:
+            return max(0.0, float(cv2.matchTemplate(gi, tpl, cv2.TM_CCOEFF_NORMED).max()))
+        ox, oy = origin[0] // 8, origin[1] // 8
+        pad = self.search_pad // 8
+        h, w = tpl.shape
+        x0, y0 = max(0, ox - pad), max(0, oy - pad)
+        x1 = min(gi.shape[1], ox + w + pad)
+        y1 = min(gi.shape[0], oy + h + pad)
+        region = gi[y0:y1, x0:x1]
+        if region.shape[0] < h or region.shape[1] < w:
+            return 0.0
+        return max(0.0, float(cv2.matchTemplate(region, tpl, cv2.TM_CCOEFF_NORMED).max()))
 
     @staticmethod
     def _prepare(frame):
@@ -271,24 +308,28 @@ class BurstRecognizer:
         # 冰蓝占比与直方图都在 ¼ 小图上统计：比例/分布稳定，速度提升 10 倍以上
         ice = self._ice(small)
         fhist = self._hist(small)
-        best = 0.0
-        neg_best = None  # 惰性：仅当某参考 pos>0.40 时计算一次（与参考图无关，可复用）
-        for idx, (hist, tpl) in enumerate(self._refs):
+        scores = []  # [(pos, 该参考图的基础分)]
+        for idx, (hist, tpl, origin) in enumerate(self._refs):
             corr = max(0.0, cv2.compareHist(hist, fhist, cv2.HISTCMP_CORREL))
-            pos = self._match(gi, tpl)
+            pos = self._match(gi, tpl, origin)
             if baseline is not None:
                 ice0, corr0 = baseline
                 ice_t = max(0.0, ice - ice0)
                 corr_t = max(0.0, corr - (corr0[idx] if idx < len(corr0) else 0.0))
             else:
                 ice_t, corr_t = ice, corr
-            s = 0.25 * ice_t + 0.20 * corr_t + 0.55 * pos
-            # 条件扣分：仅在负样本匹配度超过正样本时扣分（省算力 + 精准压制）
-            if self.neg_ready and pos > 0.40:
-                if neg_best is None:
-                    neg_best = max(self._match(gi, t) for _, t in self._neg_tpls)
-                s -= self.neg_penalty * max(0.0, neg_best - pos)
-            best = max(best, s)
+            scores.append((pos, 0.25 * ice_t + 0.20 * corr_t + 0.55 * pos))
+        if not scores:
+            return 0.0
+        if self.neg_ready:
+            # 负样本【无条件】计算：早期版本只在 pos>0.40 时才扣分，导致
+            # 「整体像但模板匹配中等」的画面（如七七 pos=0.382 + 高 ice）完全
+            # 绕过负样本——实测该画面 0.479、差 0.02 就误触玛薇卡。
+            # 负样本与参考图无关，只算一次，对所有参考图分别扣分后取最大。
+            neg_best = max(self._match(gi, t, o) for _, t, o in self._neg_tpls)
+            best = max(s - self.neg_penalty * max(0.0, neg_best - pos) for pos, s in scores)
+        else:
+            best = max(s for _, s in scores)
         return max(0.0, best)
 
 
@@ -577,6 +618,7 @@ class BurstTrigger:
         self._lum_at_q: float | None = None
         self._baseline: tuple | None = None  # Q 瞬间场景基准 (ice0, corr0列表) — 奥黛塔
         self._baseline_col: tuple | None = None  # 同上 — 哥伦比娅
+        self._baseline_mav: tuple | None = None  # 同上 — 玛薇卡
         self._last_trigger_at = 0.0
         self._last_q_at = 0.0
 
@@ -880,21 +922,31 @@ class BurstTrigger:
                             # 导致误触发，增量形式只保留爆发带来的突变，底色不再计分。
                             self._baseline = None
                             self._baseline_col = None
+                            self._baseline_mav = None
                             if self.recognizer is not None:
                                 try:
                                     s0, _ = self.recognizer._prepare(frame)
                                     fhist0 = self.recognizer._hist(s0)
                                     corr0 = [max(0.0, cv2.compareHist(h, fhist0, cv2.HISTCMP_CORREL))
-                                             for h, _ in self.recognizer._refs]
+                                             for h, _, _ in self.recognizer._refs]
                                     self._baseline = (self.recognizer._ice(s0), corr0)
                                 except Exception:
                                     self._baseline = None
+                            if self.mavuika_rec is not None:
+                                try:
+                                    s0, _ = self.mavuika_rec._prepare(frame)
+                                    fhist0 = self.mavuika_rec._hist(s0)
+                                    corr0m = [max(0.0, cv2.compareHist(h, fhist0, cv2.HISTCMP_CORREL))
+                                              for h, _, _ in self.mavuika_rec._refs]
+                                    self._baseline_mav = (self.mavuika_rec._ice(s0), corr0m)
+                                except Exception:
+                                    self._baseline_mav = None
                             if self.columbina_rec is not None:
                                 try:
                                     s0, _ = self.columbina_rec._prepare(frame)
                                     fhist0 = self.columbina_rec._hist(s0)
                                     corr0c = [max(0.0, cv2.compareHist(h, fhist0, cv2.HISTCMP_CORREL))
-                                              for h, _ in self.columbina_rec._refs]
+                                              for h, _, _ in self.columbina_rec._refs]
                                     self._baseline_col = (self.columbina_rec._ice(s0), corr0c)
                                 except Exception:
                                     self._baseline_col = None
@@ -943,7 +995,7 @@ class BurstTrigger:
                     if self.det_mode in ("recognition", "both") and not fired and self.mavuika_rec is not None:
                         if shared is None:
                             shared = self.mavuika_rec._prepare(frame)
-                        mscore = self.mavuika_rec.check(frame, shared)
+                        mscore = self.mavuika_rec.check(frame, shared, baseline=self._baseline_mav)
                         self.last_mavuika_score = mscore
                         if mscore >= self.mavuika_rec.threshold:
                             self._mav_hits += 1

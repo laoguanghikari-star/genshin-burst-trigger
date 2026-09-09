@@ -19,6 +19,21 @@
       "assets/burst_ref_face.png",
       "assets/burst_ref_late.png"
     ],
+    "reference_rois": [
+      [
+        640,
+        408,
+        869,
+        578
+      ],
+      [
+        768,
+        288,
+        1024,
+        864
+      ]
+    ],
+    "search_pad": 64,
     "template_roi": [
       768,
       288,
@@ -143,11 +158,12 @@
       "assets/mavuika_ref02.png"
     ],
     "template_roi": [
-      0,
-      0,
+      768,
+      288,
       1024,
       864
     ],
+    "search_pad": 64,
     "negative_roi": [
       768,
       288,
@@ -193,6 +209,7 @@
       1024,
       864
     ],
+    "search_pad": 64,
     "negative_roi": [
       768,
       288,
