@@ -30,8 +30,8 @@ score = 0.25×冰蓝占比 + 0.20×HSV直方图相关 + 0.55×姿态模板匹配
 - **多参考图**：每角色支持多张参考图（列表），分别评分取最大——覆盖爆发演示的不同阶段（如玛薇卡跃起/骑行、哥伦比娅面部特写/天使形态）
 - **负样本系统**：七七/桑多涅/茜特菈莉/其他角色爆发/队伍配置页等画面加入负样本，只有帧比正参考更"像"负样本时才扣分（条件扣分），精准压制误触
 - **场景自适应基准**：Q 按下瞬间采集场景的冰蓝占比与直方图相关度，`ice/hist` 改为相对增量——**海边、天云峠等大范围蓝色场景**不再抬高分数（实测蓝色场景基准下玛薇卡帧归零，奥黛塔自身 0.647 仍触发）
-- **低延迟优化**：模板匹配在 ⅛ 尺度进行（分数与 ¼ 实测偏差 <0.01），三角色识别器合计约 **53ms/帧**；确认窗口期间自动暂停通关/商城/启动监控，爆发采样不被抢帧
-- 实测交叉验证（阈值 0.5/0.55，连续 2 帧）：
+- **低延迟优化**：模板匹配在 ⅛ 尺度进行，三角色识别器合计约 **53ms/帧**（原机实测：`python tools/bench.py` → `output/bench_result.txt`，中位 53.3ms，⅛ 与 ¼ 分数最大偏差 0.0030）；确认窗口期间自动暂停通关/商城监控，爆发采样不被抢帧（启动读条监控独立于此门，避免漏检）
+- 实测交叉验证（阈值：奥黛塔 0.55、玛薇卡/哥伦比娅 0.5；连续 2 帧）：
   - 奥黛塔 0.894 触发；玛薇卡 0.813/0.867 触发；哥伦比娅 0.71~0.85 触发（01 帧即触发）
   - 各角色互不误触（≤0.40），队伍配置页 0.117~0.402 安全
 
@@ -148,12 +148,23 @@ python fx_server.py --demo paimon:10 # 特效演示：派蒙视频 10 秒
 - 游戏需无边框窗口模式；只支持 1 号显示器
 - BGM 播放期间屏蔽新触发（防叠音）；触发冷却 20 秒
 - 爆发识别依赖 Q 键（识别窗口 2.5 秒）
+- **保留但当前未生效的配置**（改它们不会有反应）：`flash_threshold` / `flash_region`（`detection.mode=recognition` 时走识别通道）、`party_panel` / `target_slot` / `use_slot_check`（槽位校验默认关闭）、`fx.edge_ratio` / `fx.fps` / `fx.cycle_seconds`（灯光秀旧参数，现由 `_draw` 内部常量与 `root.after(16)` 驱动）
+- **本机绝对路径**：`fx.gif.path` 与 `voice.game_path` 默认指向开发者机器，换机器请在 GUI 里改或直接编辑 config.json；路径缺失时 `fx_server` 会显式打印日志并降级，不会崩
+
+## 开发 / 验证
+
+```powershell
+python tools/bench.py            # 性能基准（写 output/bench_result.txt）
+python gui.py --selftest         # 环境自检（写 output/selftest_result.txt，退出码 0=通过）
+python tools/test_new_ref.py     # 参考图交叉验证（换参考图后跑）
+python tools/test_face_ref.py    # 面部模板专项验证
+```
 
 ## 版权声明
 
 - **BGM**：`burst_bgm.wav`（B站「一滴一滴刺痛我的心」）、`mavuika_bgm.wav`（《灼火之心》1:56-2:59）、`columbina_bgm.wav`（《白鸽之诗》2:14-2:58）、`victory_bgm.wav`、`shop_bgm.mp3`（《朋友的酒》）均来自网络公开音源，版权归原作者/miHoYo 所有，仅供个人使用；如遇版权方要求请替换
 - **游戏截图**（`burst_ref.png`、`neg_*.png`、参考图等）为《原神》游戏画面，版权归 miHoYo
-- 代码遵循 MIT 协议，可自由修改分发
+- 代码遵循 MIT 协议，可自由修改分发（完整条款见仓库根目录 `LICENSE`）
 
 ## 项目结构
 
@@ -162,12 +173,15 @@ genshin-burst-trigger/
 ├── gui.py             # 图形化控制台（推荐入口，含测试按钮）
 ├── main.py            # 主程序（三角色识别 + 通关/商城/启动监控）
 ├── calibrate.py       # 校准工具
-├── fx_server.py       # 特效进程（灯光秀/胜利/火焰/派蒙，透明叠加窗口）
+├── fx_server.py       # 特效进程（灯光秀/胜利/火焰/派蒙/商城立绘，透明叠加窗口）
 ├── fx_client.py       # 特效控制客户端（命令管道）
 ├── theme.py           # GUI 冰晶主题（纯 tkinter）
-├── voice.py           # 语音控制（vosk 离线识别）
+├── voice.py           # 语音控制（vosk 离线识别 + 唤醒词）
 ├── config.json        # 全部配置
-├── tools/trim.py          # 音频截取工具
+├── build_exe.ps1      # 打包 exe（PyInstaller onedir）
+├── LICENSE            # MIT
+├── tools/bench.py            # 性能基准
+├── tools/trim.py             # 音频截取工具
 ├── tools/process_victory.py  # 绿幕抠像 → 帧序列工具
 ├── assets/            # BGM、参考图、负样本、帧序列（npz）
 └── requirements.txt
