@@ -37,15 +37,17 @@ score = 0.25×冰蓝占比 + 0.20×HSV直方图相关 + 0.55×姿态模板匹配
 
 ## 🛒 商城 BGM + 立绘特效（shop）
 
-持续屏幕监控（非 Q 触发）：识别到**购买创世结晶界面** →《朋友的酒》无限循环播放 + **许家空/许家萤立绘登场**；离开商城（连续 6 次未识别 ≈ 3 秒）→ BGM 淡出 + 立绘 2 秒退场。
+持续屏幕监控（非 Q 触发）：识别到**购买创世结晶界面** →《朋友的酒》无限循环播放 + **许家空/许家萤立绘登场**；离开（凝取结晶行不再选中，连续 6 次未命中 ≈ 3 秒）→ BGM 淡出 + 立绘 2 秒退场。
 
-- **三重信号识别**（左栏「凝取结晶」字样及颜色——侧栏 UI 不透明，不随半透明面板后的环境变化）：
-  1. 「凝取结晶」高亮行亮度 ≥ 150（选中态高亮色）
-  2. 行上方侧栏为深色 UI 背景（≤ 130，区别白色/浅色界面）
-  3. 行内容模板匹配（双参考图覆盖不同环境，阈值 0.45）
+- **双 ROI 苛刻匹配**（两个特征同时命中才触发，均在固定区域 ±8px 内匹配，**不扫全帧**）：
+  1. 左栏「凝取结晶」**白底黑字高亮行**（选中态）≥ `tab_threshold`（默认 0.80）
+  2. 左上角「**请适度娱乐，理性消费**」提示语 ≥ `notice_threshold`（默认 0.80）
+- **为什么不用评分公式**：早期版本沿用爆发识别的 `ice/直方图/全帧模板` 评分，实测大世界雪地会误触——模板在画面右侧 (2152,736) 偶然命中 0.62，且雪地 ice 高达 0.34~0.59 反而给误触加分（真商城 ice 仅 0.099）；亮度判据（高亮行 ≥150 / 深色侧栏 ≤130）在雪地里同样满足。**对固定 UI 检测，全帧扫描 + 色彩评分是负资产。**
+- **实测区分度**（70 张 2K 截图回归）：真商城 `1.000 / 1.000`，其余全部 ≤0.244（含 4 张误触图、月卡/礼包/装扮/兑换、战斗、菜单、通关、启动界面）→ 仅 2 张真商城命中
+- 语义：**必须停在「凝取结晶」页**（其他商城子页的提示语也匹配 1.000，但凝取结晶行未选中 → 不触发）
 - **立绘特效**：许家空（左中偏下）+ 许家萤（右中偏下，同尺寸 129×150）+ 中央警示语（黑体红字黑描边，可配置行数/字号，自适应贴底排版）
 - 文案示例：`原初之光虽好 / 可不要做空你自己的世界哦`（`fx.shop_text` 随时可改）
-- 实测：氪金页（含不同环境）触发，月卡/礼包/装扮/兑换/队伍配置/白色启动界面全部安全
+- 回归脚本：`python tools/verify_shop_strict.py`（走真实 ShopMonitor 代码路径）
 
 ## 🚀 启动派蒙迎接视频（startup）
 
@@ -142,7 +144,7 @@ python fx_server.py --demo paimon:10 # 特效演示：派蒙视频 10 秒
 | mavuika | reference / match_threshold / audio_file / volume / fx_duration | 玛薇卡参考图(2张) / 阈值 / BGM / 音量 / 火焰特效时长 | 0.5 / mavuika_bgm.wav / 0.7 / 3.0 |
 | columbina | reference / match_threshold / audio_file / fx_duration | 哥伦比娅参考图(6张) / 阈值 / BGM / 特效时长(待定) | 0.5 / columbina_bgm.wav / 4.0 |
 | completion | enabled / reference / match_threshold / sound_file / bgm_file / fx_duration / bgm_fade_delay_seconds | 通关庆祝配置 | 0.45 / unbelievable.wav / victory_bgm.wav / 14 / 0 |
-| shop | enabled / reference / template_roi / match_threshold / highlight_roi / highlight_min / dark_roi / dark_max / check_interval / stop_misses / audio_file / fade_seconds | 商城氪金页监控（三重信号） | 0.45 / [60,640,300,120] / 150 / [60,540,300,90] / 130 / 0.5s / 6 次 / shop_bgm.mp3 / 1.5s |
+| shop | enabled / tab_reference / tab_roi / tab_threshold / notice_reference / notice_roi / notice_threshold / roi_pad / match_frames / check_interval / stop_misses / audio_file / fade_seconds | 商城氪金页监控（双 ROI 苛刻匹配：凝取结晶高亮行 + 防沉迷提示语） | true / 2 张 / [60,640,300,120] / 0.80 / 2 张 / [44,76,290,38] / 0.80 / 8 / 2 / 0.5s / 6 次 / shop_bgm.mp3 / 1.5s |
 | startup | enabled / icon_roi / trigger_ratio / release_ratio / min_clusters / margin_white / check_interval / paimon_duration | 启动读条监控（触发时机） | [900,660,850,130] / 0.035 / 0.02 / 2 / 0.995 / 0.3s / 10.0 |
 | fx | enabled / intensity / fade_seconds / burst_duration / fire_frames / paimon_frames / paimon_intensity / victory_frames / shop_kong / shop_ying / shop_text / shop_font_size | 特效配置（含商城立绘与警示语文案） | 0.87 / 2 / 27 / 各帧序列 / 1.15 / xujia_kong.png / xujia_ying.png |
 | voice | enabled / model_path / game_path / tts / commands / wake / wake_word / wake_timeout_seconds / wake_tts / wake_audio | 语音控制（先喊唤醒词再下指令；唤醒回应音频优先于 TTS） | vosk 模型 / YuanShen.exe / true / true / 派蒙派蒙 / 10s / true / assets/wake_reply.wav |

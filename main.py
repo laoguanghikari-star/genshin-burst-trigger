@@ -348,63 +348,87 @@ class CompletionMonitor:
 
 # ---------------------------------------------------------------- shop
 class ShopMonitor:
-    """商城「购买创世结晶」界面持续监控：进入 → 立绘+BGM，离开 → 淡出停止。
+    """商城「购买创世结晶」界面持续监控（苛刻匹配版）。
 
-    识别采用三重信号（跟随用户建议：左栏「凝取结晶」字样及颜色）——
-    侧栏 UI 是不透明的，不会随半透明面板后的环境变化：
-      1) 左栏「凝取结晶」行高亮：亮度 ≥ highlight_min（选中态的亮色高亮）
-      2) 行上方侧栏背景为深色 UI：亮度 ≤ dark_max（区别于白色/浅色界面）
-      3) 行内容模板匹配（凝取结晶字样样式，双参考图覆盖不同环境）
-    三重信号全部满足才计入命中，任一不满足即计数未命中。
-    离开商城（侧栏消失/未高亮）→ 连续 stop_misses 次未命中 → 离开边沿。"""
+    判据 = 双 ROI 模板匹配（均在固定区域 ±roi_pad 内匹配，**不扫全帧**）：
+      1) 左栏「凝取结晶」高亮行（白底黑字选中态）匹配 ≥ tab_threshold
+      2) 左上角「请适度娱乐，理性消费」提示语匹配 ≥ notice_threshold
+    两者同时满足才计入命中。
+
+    为什么不再用评分公式：实测误触时（大世界雪地）模板在画面右侧 (2152,736)
+    偶然命中 0.62，且雪地 ice 高达 0.34~0.59 反而给误触加分 0.09~0.15；
+    真商城 ice 只有 0.099。全帧扫描 + ice/直方图对固定 UI 检测是负资产。
+    双 ROI 匹配实测（70 张 2K 截图）：真商城 1.000/1.000，其余全部 ≤0.244。
+
+    进入（连续 match_frames 次）→ BGM + 立绘；离开（连续 stop_misses 次）→ 淡出。
+    """
 
     def __init__(self, cfg: dict):
         s = cfg.get("shop", {})
         self.enabled = bool(s.get("enabled", False))
         self.check_interval = float(s.get("check_interval", 0.5))
+        self.match_frames = int(s.get("match_frames", 2))
         self.stop_misses = int(s.get("stop_misses", 6))
-        self.highlight_roi = s.get("highlight_roi", [60, 640, 300, 120])  # 凝取结晶高亮行
-        self.highlight_min = float(s.get("highlight_min", 150))
-        self.dark_roi = s.get("dark_roi", [60, 540, 300, 90])  # 行上方侧栏背景
-        self.dark_max = float(s.get("dark_max", 130))
-        self.recognizer = None
-        if self.enabled:
-            det = {
-                "mode": "recognition",
-                "reference": s.get("reference", "assets/shop_tab_ref.png"),
-                "template_roi": s.get("template_roi", [60, 640, 300, 120]),
-                "negative_roi": s.get("negative_roi"),
-                "negative_templates": s.get("negative_templates", []),
-                "neg_penalty": float(s.get("neg_penalty", 1.0)),
-                "match_threshold": float(s.get("match_threshold", 0.45)),
-                "match_frames": int(s.get("match_frames", 2)),
-                "window_seconds": 1.0,
-            }
-            self.recognizer = BurstRecognizer({"detection": det})
-            self.threshold = det["match_threshold"]
-            self.match_frames = det["match_frames"]
+        self.tab_roi = tuple(s.get("tab_roi", [60, 640, 300, 120]))
+        self.notice_roi = tuple(s.get("notice_roi", [44, 76, 290, 38]))
+        self.tab_threshold = float(s.get("tab_threshold", 0.80))
+        self.notice_threshold = float(s.get("notice_threshold", 0.80))
+        self.roi_pad = int(s.get("roi_pad", 8))
+        self.tab_tpls = self._load_tpls(s.get("tab_reference", ["assets/shop_tab_ref.png"]))
+        self.notice_tpls = self._load_tpls(s.get("notice_reference", []))
+        self.ready = bool(self.tab_tpls and self.notice_tpls)
+        self.last_tab = 0.0    # 最近一次匹配分（供调试/日志）
+        self.last_notice = 0.0
         self._hits = 0
         self._active = False
         self._misses = 0
         self._last_check = 0.0
 
     @staticmethod
-    def _mean_gray(frame, roi) -> float:
+    def _load_tpls(names) -> list:
+        if isinstance(names, str):
+            names = [names]
+        out = []
+        for n in names or []:
+            p = Path(n)
+            if not p.is_absolute():
+                p = BASE / p
+            try:
+                img = cv2.imdecode(np.fromfile(str(p), dtype=np.uint8), cv2.IMREAD_COLOR)
+                if img is not None:
+                    out.append(img)
+            except Exception:
+                pass
+        return out
+
+    def _match_roi(self, frame, tpls, roi) -> float:
+        """只在 roi ±roi_pad 区域内匹配（多模板取最大），不扫全帧。"""
         x, y, w, h = roi
-        seg = frame[y : y + h, x : x + w]
-        return float((seg[..., 0] * 0.114 + seg[..., 1] * 0.587 + seg[..., 2] * 0.299).mean())
+        pad = self.roi_pad
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1 = min(frame.shape[1], x + w + pad)
+        y1 = min(frame.shape[0], y + h + pad)
+        region = frame[y0:y1, x0:x1]
+        if region.size == 0:
+            return 0.0
+        best = 0.0
+        for tpl in tpls:
+            if region.shape[0] < tpl.shape[0] or region.shape[1] < tpl.shape[1]:
+                continue
+            best = max(best, float(cv2.matchTemplate(region, tpl, cv2.TM_CCOEFF_NORMED).max()))
+        return best
 
     def update(self, frame, now: float) -> tuple[bool, bool]:
         """每帧调用（内部按 check_interval 节流）。返回 (进入边沿, 离开边沿)。"""
-        if self.recognizer is None:
+        if not (self.enabled and self.ready):
             return False, False
         if now - self._last_check < self.check_interval:
             return False, False
         self._last_check = now
-        score = self.recognizer.check(frame)
-        hl = self._mean_gray(frame, self.highlight_roi)
-        dk = self._mean_gray(frame, self.dark_roi)
-        if score >= self.threshold and hl >= self.highlight_min and dk <= self.dark_max:
+        tab = self._match_roi(frame, self.tab_tpls, self.tab_roi)
+        notice = self._match_roi(frame, self.notice_tpls, self.notice_roi)
+        self.last_tab, self.last_notice = tab, notice
+        if tab >= self.tab_threshold and notice >= self.notice_threshold:
             self._hits += 1
             self._misses = 0
             if self._hits >= self.match_frames and not self._active:
@@ -780,6 +804,10 @@ class BurstTrigger:
                     # 商城创世结晶购买页监控（持续，独立于 Q；特效播放期间暂停）
                     if now >= self._fx_until:
                         enter, leave = self.shop.update(frame, now)
+                        if self.debug and (self.shop.last_tab > 0.5 or self.shop.last_notice > 0.5):
+                            self._log(f"[商城] tab={self.shop.last_tab:.3f} "
+                                      f"notice={self.shop.last_notice:.3f} "
+                                      f"(需 ≥{self.shop.tab_threshold:.2f}/{self.shop.notice_threshold:.2f})")
                         if enter:
                             if shop_player is not None and not shop_player.is_playing():
                                 shop_player.play(loops=-1)

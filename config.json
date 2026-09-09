@@ -219,47 +219,32 @@
   },
   "shop": {
     "enabled": true,
-    "reference": [
+    "tab_reference": [
       "assets/shop_tab_ref.png",
       "assets/shop_tab_ref02.png"
     ],
-    "template_roi": [
+    "tab_roi": [
       60,
       640,
       300,
       120
     ],
-    "negative_roi": [
-      60,
-      640,
-      300,
-      120
+    "tab_threshold": 0.8,
+    "notice_reference": [
+      "assets/shop_notice_ref.png",
+      "assets/shop_notice_ref02.png"
     ],
-    "negative_templates": [
-      "assets/shop_tab_neg01.png",
-      "assets/shop_tab_neg02.png",
-      "assets/shop_tab_neg03.png",
-      "assets/shop_tab_neg04.png"
+    "notice_roi": [
+      44,
+      76,
+      290,
+      38
     ],
-    "neg_penalty": 1.0,
-    "match_threshold": 0.45,
+    "notice_threshold": 0.8,
+    "roi_pad": 8,
     "match_frames": 2,
     "check_interval": 0.5,
     "stop_misses": 6,
-    "highlight_roi": [
-      60,
-      640,
-      300,
-      120
-    ],
-    "highlight_min": 150,
-    "dark_roi": [
-      60,
-      540,
-      300,
-      90
-    ],
-    "dark_max": 130,
     "audio_file": "assets/shop_bgm.mp3",
     "fade_seconds": 1.5
   },
